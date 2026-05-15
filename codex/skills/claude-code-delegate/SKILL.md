@@ -42,9 +42,11 @@ python3 ~/.codex/skills/claude-code-delegate/scripts/delegate_claude.py \
   --validate "pnpm test"
 ```
 
-The runner writes `.codex/delegations/<job-id>/task.md`, invokes `claude -p`, captures logs, records the diff, checks file scope, and executes `--validate` commands itself after Claude exits.
+The runner writes `.codex/delegations/<job-id>/task.md`, invokes `claude -p`, captures logs, records before/after diff and status snapshots, checks file scope for changes made by this delegation only, and executes `--validate` commands itself after Claude exits.
 
 Default Claude tools are `Read,Edit,Write`. `Bash` is intentionally disabled so Claude does not burn turns on validation commands that the local permission layer may deny. Use `--allow-worker-bash` only for a job that truly needs shell inspection or mechanical commands during the patch.
+
+Default permission mode is `acceptEdits` for normal repos. For local agent/skill infrastructure repos under `.claude`, `.codex`, or `.agents`, the runner defaults to `bypassPermissions` so Claude can edit files such as `SKILL.md` that Claude Code otherwise treats as sensitive. Scope checking still runs after the edit.
 
 The runner uses `--no-session-persistence` by default. Add `--bare` only when Claude Code has API-key or auth-helper credentials available; bare mode does not read OAuth/keychain authentication.
 

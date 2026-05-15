@@ -39,6 +39,24 @@ def run_git_diff(repo: Path) -> str:
     return result.stdout
 
 
+def run_git_status(repo: Path) -> str:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=repo,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    return result.stdout
+
+
+def default_permission_mode(repo: Path) -> str:
+    parts = set(repo.parts)
+    if ".claude" in parts or ".codex" in parts or ".agents" in parts:
+        return "bypassPermissions"
+    return "acceptEdits"
+
+
 def run_validation_commands(repo: Path, commands: list[str], timeout: int) -> list[dict]:
     results: list[dict] = []
     for command in commands:
@@ -168,6 +186,11 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Write job files without invoking Claude.")
     parser.add_argument("--max-turns", default="6", help="Claude max turns. Defaults to 6.")
     parser.add_argument(
+        "--permission-mode",
+        choices=["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"],
+        help="Claude permission mode. Defaults to bypassPermissions inside local agent/skill repos, otherwise acceptEdits.",
+    )
+    parser.add_argument(
         "--allow-worker-bash",
         action="store_true",
         help="Allow Claude Code to use Bash. Off by default; runner validation still runs after Claude exits.",
@@ -213,6 +236,9 @@ def main() -> int:
     worker_prompt_path.write_text(WORKER_PROMPT.read_text(encoding="utf-8"), encoding="utf-8")
     task_path.write_text(render_task(args.objective, args.allow, args.forbid, args.validate), encoding="utf-8")
     (job_dir / "before.diff").write_text(run_git_diff(repo), encoding="utf-8")
+    (job_dir / "before.status").write_text(run_git_status(repo), encoding="utf-8")
+
+    permission_mode = args.permission_mode or default_permission_mode(repo)
 
     command = [
         claude_bin or "claude",
@@ -223,7 +249,7 @@ def main() -> int:
         "--max-turns",
         str(args.max_turns),
         "--permission-mode",
-        "acceptEdits",
+        permission_mode,
         "--tools",
         "Read,Edit,Write,Bash" if args.allow_worker_bash else "Read,Edit,Write",
         "--append-system-prompt-file",
@@ -249,6 +275,7 @@ def main() -> int:
     (job_dir / "stdout.log").write_text(proc.stdout, encoding="utf-8")
     (job_dir / "stderr.log").write_text(proc.stderr, encoding="utf-8")
     (job_dir / "after.diff").write_text(run_git_diff(repo), encoding="utf-8")
+    (job_dir / "after.status").write_text(run_git_status(repo), encoding="utf-8")
 
     scope_report = job_dir / "scope-report.json"
     scope_proc = subprocess.run(
@@ -261,6 +288,10 @@ def main() -> int:
             str(allowed_path),
             "--forbidden",
             str(forbidden_path),
+            "--before-diff",
+            str(job_dir / "before.diff"),
+            "--before-status",
+            str(job_dir / "before.status"),
             "--output",
             str(scope_report),
         ],
@@ -287,6 +318,7 @@ def main() -> int:
         "claude_returncode": proc.returncode,
         "scope_returncode": scope_proc.returncode,
         "validation_ok": validation_ok,
+        "permission_mode": permission_mode,
         "stdout_log": str(job_dir / "stdout.log"),
         "stderr_log": str(job_dir / "stderr.log"),
         "scope_report": str(scope_report),
