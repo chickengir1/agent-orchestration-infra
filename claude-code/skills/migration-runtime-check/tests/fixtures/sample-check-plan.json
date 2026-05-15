@@ -25,20 +25,20 @@
       "id": "default",
       "auth": null,
       "vars": {},
-      "labels": {
-        "role": "unknown"
-      }
+      "labels": [],
+      "metadata": {}
     },
     {
-      "id": "group-2-default",
+      "id": "group-2-admin",
       "auth": null,
       "vars": {
         "group_id": "2"
       },
-      "labels": {
-        "role": "unknown",
-        "group": "group-2",
-        "permissionScope": "unknown"
+      "labels": ["유료 학교", "설정 가능 계정"],
+      "metadata": {
+        "접근 대상": "2번 그룹",
+        "그룹 내 권한": "관리자",
+        "검증 의도": "설정 페이지 접근 유지"
       }
     }
   ],

@@ -291,6 +291,31 @@ def split_noise(diff_entry: dict, patterns: list[str]) -> dict:
     return noise
 
 
+def autoload_plan(run_dir: Path) -> dict | None:
+    """Try to load the check-plan referenced by either side's stamp.json.
+
+    Returns None if no plan path is recorded or the file is missing.
+    """
+    for side in ("A", "B"):
+        stamp_path = run_dir / side / "stamp.json"
+        if not stamp_path.is_file():
+            continue
+        try:
+            stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        plan_path = stamp.get("planPath")
+        if not plan_path:
+            continue
+        p = Path(plan_path)
+        if p.is_file():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
 def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
     patterns: list[str] = list((plan or {}).get("knownUnstable") or [])
     a_side = load_side(run_dir, "A")
@@ -342,7 +367,8 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
                 "auth": b_cap.get("auth"),
                 "contextId": b_cap.get("contextId"),
                 "vars": b_cap.get("vars", {}),
-                "labels": b_cap.get("labels", {}),
+                "labels": b_cap.get("labels", []),
+                "metadata": b_cap.get("metadata", {}),
             },
         }
 
@@ -351,6 +377,7 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
         "bOnly": b_only,
         "invalidCaptures": invalid,
         "pages": pages,
+        "planLoaded": plan is not None,
     }
 
 
@@ -490,12 +517,25 @@ def _render_console_runtime(d: dict) -> list[str]:
 
 
 def _render_context_header(ctx: dict) -> list[str]:
-    return [
+    lines = [
         "Context:",
         f"- auth: {ctx.get('auth')}",
         f"- vars: {ctx.get('vars') or {}}",
-        f"- labels: {ctx.get('labels') or {}}",
     ]
+    labels = ctx.get("labels") or []
+    if labels:
+        lines.append(f"- labels: {', '.join(labels)}")
+    else:
+        lines.append("- labels: (none)")
+    metadata = ctx.get("metadata") or {}
+    if metadata:
+        lines.append("- metadata:")
+        for key, value in metadata.items():
+            rendered = json.dumps(value, ensure_ascii=False)
+            lines.append(f"  - {key}: {rendered}")
+    else:
+        lines.append("- metadata: (none)")
+    return lines
 
 
 def _render_noise_candidates(noise: dict) -> list[str]:
@@ -550,27 +590,32 @@ def render_report(diff: dict) -> str:
     total = len(diff["pages"])
     invalid = diff.get("invalidCaptures") or []
     with_diff: list[str] = []
+    noise_only: list[str] = []
     cat_capture = 0
     cat_actions = 0
     cat_console = 0
     for sid, entry in diff["pages"].items():
         d = entry["diff"]
-        if not page_has_signal(d):
-            continue
-        with_diff.append(sid)
-        if has_page_capture_diff(d):
-            cat_capture += 1
-        if has_actions_diff(d):
-            cat_actions += 1
-        if has_console_diff(d):
-            cat_console += 1
+        if page_has_signal(d):
+            with_diff.append(sid)
+            if has_page_capture_diff(d):
+                cat_capture += 1
+            if has_actions_diff(d):
+                cat_actions += 1
+            if has_console_diff(d):
+                cat_console += 1
+        elif has_noise(entry["noise"]):
+            noise_only.append(sid)
 
     lines.append("## Summary")
     lines.append(f"- total scenarios: {total + len(invalid)}")
     lines.append(f"- scenarios with differences: {len(with_diff)}")
+    lines.append(f"- noise-only scenarios: {len(noise_only)}")
     lines.append(f"- invalid captures: {len(invalid)}")
     lines.append(f"- A-only scenarios: {len(diff['aOnly'])}")
     lines.append(f"- B-only scenarios: {len(diff['bOnly'])}")
+    if not diff.get("planLoaded"):
+        lines.append("- check-plan not loaded (knownUnstable patterns disabled)")
     lines.append("")
     lines.append("### Category counts (scenarios affected)")
     lines.append(f"- Page Capture: {cat_capture}")
@@ -621,7 +666,27 @@ def render_report(diff: dict) -> str:
             if has_noise(entry["noise"]):
                 lines.extend(_render_noise_candidates(entry["noise"]))
                 lines.append("")
-    elif not invalid:
+
+    if noise_only:
+        lines.append("## Noise-only Scenarios")
+        lines.append("")
+        for sid in noise_only:
+            entry = diff["pages"][sid]
+            noise = entry["noise"]
+            tags: list[str] = []
+            if noise["classes_added"] or noise["classes_removed"] or noise["classes_changed"]:
+                tags.append(
+                    f"classes +{len(noise['classes_added'])} "
+                    f"-{len(noise['classes_removed'])} Δ{len(noise['classes_changed'])}"
+                )
+            if noise["texts_added"]:
+                tags.append(f"texts +{len(noise['texts_added'])}")
+            if noise["console_b_new"]:
+                tags.append(f"console (non-error) +{len(noise['console_b_new'])}")
+            lines.append(f"- {sid}: {'; '.join(tags) or '(empty)'}")
+        lines.append("")
+
+    if not with_diff and not invalid and not noise_only:
         lines.append("_No differences detected on any compared scenario._")
         lines.append("")
 
@@ -644,6 +709,8 @@ def main() -> int:
     plan = None
     if ns.plan:
         plan = json.loads(Path(ns.plan).read_text(encoding="utf-8"))
+    else:
+        plan = autoload_plan(run_dir)
 
     diff = build_diff(run_dir, plan=plan)
     (run_dir / "report.md").write_text(render_report(diff), encoding="utf-8")

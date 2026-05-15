@@ -18,6 +18,7 @@ SKILL_DIR = HERE.parent
 sys.path.insert(0, str(SKILL_DIR))
 
 from compare import (  # noqa: E402
+    autoload_plan,
     build_diff,
     compare_page,
     page_has_signal,
@@ -294,6 +295,180 @@ def case_no_signal_scenario_omitted_from_differences() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_schema_allows_label_array_and_metadata_object() -> None:
+    """Structural shape check on the sample check-plan."""
+    plan_path = SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    target = None
+    for ctx in plan["contexts"]:
+        if ctx["id"] == "group-2-admin":
+            target = ctx
+            break
+    if target is None:
+        fail("schema_allows_label_array_and_metadata_object",
+             "group-2-admin context missing", plan)
+    labels = target.get("labels")
+    if not isinstance(labels, list) or not all(isinstance(s, str) for s in labels):
+        fail("schema_allows_label_array_and_metadata_object",
+             "labels must be array<string>", target)
+    metadata = target.get("metadata")
+    if not isinstance(metadata, dict):
+        fail("schema_allows_label_array_and_metadata_object",
+             "metadata must be object", target)
+    # Korean key must be preserved verbatim
+    if "접근 대상" not in metadata:
+        fail("schema_allows_label_array_and_metadata_object",
+             "Korean metadata key not preserved", metadata)
+
+
+def case_plan_helper_labels_and_metadata() -> None:
+    import subprocess
+    discover_fixture = SKILL_DIR / "tests" / "fixtures" / "discover-sample.json"
+    py = SKILL_DIR / ".venv" / "bin" / "python3"
+    if not py.exists():
+        py = Path(sys.executable)
+    result = subprocess.run(
+        [
+            str(py),
+            str(SKILL_DIR / "plan_helper.py"),
+            "--discover", str(discover_fixture),
+            "--app", "libs-app",
+            "--baseline-branch", "dev",
+            "--candidate-branch", "mig",
+            "--base-url", "http://localhost:4200",
+            "--context-id", "ctx-A",
+            "--labels", "유료 학교,설정 가능 계정",
+            "--metadata-json", '{"접근 대상":"2번 그룹","그룹 내 권한":"관리자"}',
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        fail("plan_helper_labels_and_metadata",
+             f"helper exited {result.returncode}",
+             {"stdout": result.stdout, "stderr": result.stderr})
+    plan = json.loads(result.stdout)
+    ctx = plan["contexts"][0]
+    if ctx["labels"] != ["유료 학교", "설정 가능 계정"]:
+        fail("plan_helper_labels_and_metadata",
+             "labels not parsed as array", ctx)
+    if ctx["metadata"] != {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}:
+        fail("plan_helper_labels_and_metadata",
+             "metadata not parsed as object", ctx)
+
+
+def case_capture_preserves_labels_and_metadata() -> None:
+    """build_diff must propagate capture.json labels/metadata into entry context."""
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-meta", BASELINE)
+        b = _scenario_cap("scenario-meta", BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        for cap in (a, b):
+            cap["labels"] = ["유료 학교", "설정 가능 계정"]
+            cap["metadata"] = {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run)
+        ctx = diff["pages"]["scenario-meta"]["context"]
+        if ctx["labels"] != ["유료 학교", "설정 가능 계정"]:
+            fail("capture_preserves_labels_and_metadata", "labels lost", ctx)
+        if ctx["metadata"].get("접근 대상") != "2번 그룹":
+            fail("capture_preserves_labels_and_metadata", "metadata lost", ctx)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_report_shows_labels_and_metadata() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-meta", BASELINE)
+        b = _scenario_cap("scenario-meta", BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        for cap in (a, b):
+            cap["labels"] = ["유료 학교", "설정 가능 계정"]
+            cap["metadata"] = {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run)
+        report = render_report(diff)
+        for needle in ("유료 학교", "설정 가능 계정", "접근 대상", "그룹 내 권한"):
+            if needle not in report:
+                fail("report_shows_labels_and_metadata",
+                     f"missing {needle!r} in report", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_compare_autoloads_plan_from_stamp() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        run = tmp / "run-x"
+        a = _scenario_cap("scenario-noise", BASELINE)
+        b = _scenario_cap("scenario-noise", BASELINE)
+        b["view"]["classes"]["lds-bars"] = 3
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        plan_path = tmp / "check-plan.json"
+        plan_path.write_text(json.dumps({"knownUnstable": ["lds-bars"]}), encoding="utf-8")
+        (run / "A").mkdir(parents=True, exist_ok=True)
+        (run / "A" / "stamp.json").write_text(
+            json.dumps({"planPath": str(plan_path)}), encoding="utf-8"
+        )
+        # autoload_plan must read planPath and return plan dict
+        loaded = autoload_plan(run)
+        if loaded is None or "lds-bars" not in loaded.get("knownUnstable", []):
+            fail("compare_autoloads_plan_from_stamp",
+                 "plan not autoloaded", {"loaded": loaded})
+        diff = build_diff(run, plan=loaded)
+        entry = diff["pages"].get("scenario-noise")
+        if entry is None:
+            fail("compare_autoloads_plan_from_stamp",
+                 "scenario missing", diff)
+        if "lds-bars" not in entry["noise"]["classes_added"]:
+            fail("compare_autoloads_plan_from_stamp",
+                 "noise not separated after autoload", entry)
+        report = render_report(diff)
+        if "check-plan not loaded" in report:
+            fail("compare_autoloads_plan_from_stamp",
+                 "report must not say plan missing when autoloaded",
+                 {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_noise_only_scenario_listed_in_dedicated_section() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-noise-only", BASELINE)
+        b = _scenario_cap("scenario-noise-only", BASELINE)
+        # ONLY a knownUnstable signal — no other diff
+        b["view"]["classes"]["lds-bars"] = 5
+        plan = {"knownUnstable": ["lds-bars"]}
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run, plan=plan)
+        report = render_report(diff)
+        if "## Differences" in report:
+            fail("noise_only_scenario_listed_in_dedicated_section",
+                 "noise-only must not appear in Differences",
+                 {"report": report})
+        if "## Noise-only Scenarios" not in report:
+            fail("noise_only_scenario_listed_in_dedicated_section",
+                 "missing Noise-only Scenarios section",
+                 {"report": report})
+        if "scenario-noise-only" not in report:
+            fail("noise_only_scenario_listed_in_dedicated_section",
+                 "scenarioId not listed", {"report": report})
+        if "noise-only scenarios: 1" not in report:
+            fail("noise_only_scenario_listed_in_dedicated_section",
+                 "Summary count missing", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_noise_candidate_separated() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
@@ -361,6 +536,12 @@ CASES = [
     case_invalid_capture_section_in_report,
     case_no_signal_scenario_omitted_from_differences,
     case_noise_candidate_separated,
+    case_schema_allows_label_array_and_metadata_object,
+    case_plan_helper_labels_and_metadata,
+    case_capture_preserves_labels_and_metadata,
+    case_report_shows_labels_and_metadata,
+    case_compare_autoloads_plan_from_stamp,
+    case_noise_only_scenario_listed_in_dedicated_section,
 ]
 
 

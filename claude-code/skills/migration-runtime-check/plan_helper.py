@@ -17,7 +17,8 @@ Usage:
         --auth .auth/libs-app.json \
         --context-id group-2-default \
         --vars group_id=2 \
-        --labels role=unknown,group=group-2,permissionScope=unknown \
+        --labels "유료 학교,설정 가능 계정" \
+        --metadata-json '{"접근 대상":"2번 그룹","그룹 내 권한":"관리자"}' \
         --known-unstable "lds-bars,lds-css,ngucarousel,Fetching" \
         > check-plan-libs-app.json
 """
@@ -78,7 +79,15 @@ def build_plan(args: argparse.Namespace) -> dict:
     reachable = discover.get("reachable") or []
 
     vars_dict = parse_kv(args.vars)
-    labels = parse_kv(args.labels)
+    labels = parse_csv(args.labels)
+    metadata: dict = {}
+    if args.metadata_json:
+        try:
+            metadata = json.loads(args.metadata_json)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"--metadata-json is not valid JSON: {e}") from e
+        if not isinstance(metadata, dict):
+            raise SystemExit("--metadata-json must be a JSON object")
     known_unstable = parse_csv(args.known_unstable)
     must_cover = parse_csv(args.must_cover)
     skip = parse_csv(args.skip)
@@ -115,7 +124,7 @@ def build_plan(args: argparse.Namespace) -> dict:
         "auth": {
             "storageState": args.auth,
             "actor": args.actor or "default",
-            "role": labels.get("role", "unknown"),
+            "role": args.role or "unknown",
         },
         "knownUnstable": known_unstable,
         "contexts": [
@@ -124,6 +133,7 @@ def build_plan(args: argparse.Namespace) -> dict:
                 "auth": None,
                 "vars": vars_dict,
                 "labels": labels,
+                "metadata": metadata,
             }
         ],
         "scenarios": scenarios,
@@ -142,7 +152,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--actor", default=None)
     ap.add_argument("--context-id", required=True)
     ap.add_argument("--vars", default=None, help="comma-separated k=v pairs")
-    ap.add_argument("--labels", default=None, help="comma-separated k=v pairs (opaque)")
+    ap.add_argument("--labels", default=None, help="comma-separated opaque string tags")
+    ap.add_argument("--metadata-json", dest="metadata_json", default=None,
+                    help="JSON object string; preserved verbatim in contexts[].metadata")
+    ap.add_argument("--role", default=None, help="value for plan.auth.role; defaults to 'unknown'")
     ap.add_argument("--known-unstable", default=None, help="comma-separated substring patterns")
     ap.add_argument("--must-cover", default=None, help="comma-separated route substrings to keep")
     ap.add_argument("--skip", default=None, help="comma-separated route substrings to drop")

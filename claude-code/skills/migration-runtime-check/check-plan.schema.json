@@ -54,7 +54,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "vars", "labels"],
+        "required": ["id", "vars"],
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string" },
@@ -68,9 +68,14 @@
             "additionalProperties": { "type": "string" }
           },
           "labels": {
+            "type": "array",
+            "description": "Optional short human-readable tags shown in report. Compare tool does not interpret values.",
+            "items": { "type": "string" }
+          },
+          "metadata": {
             "type": "object",
-            "description": "Opaque human-readable metadata (role, group, permissionScope, ...). Compare tool does not interpret values.",
-            "additionalProperties": { "type": "string" }
+            "description": "Free-form metadata preserved in capture/report. Any JSON value allowed for any key (Korean keys permitted). Compare tool does not interpret values.",
+            "additionalProperties": true
           }
         }
       }
