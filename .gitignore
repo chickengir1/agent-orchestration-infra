@@ -19,3 +19,8 @@ shell-snapshots/
 # Auth or local-only state
 .auth/
 *.local.json
+
+# Local sync automation state
+.sync-local-infra.lock
+.sync-local-infra.out.log
+.sync-local-infra.err.log
