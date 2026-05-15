@@ -75,6 +75,49 @@ Claude Code:
 - `trace-api`
 - `trace-flow`
 
+## 로컬 변경 자동 동기화
+
+`scripts/sync-local-infra.py`는 로컬 Claude Code/Codex 인프라를 이 저장소 구조로 동기화합니다.
+
+동기화 대상은 allowlist로 제한합니다.
+
+- `~/.claude/agents`
+- `~/.claude/skills`
+- `~/.codex/agents`
+- `~/.codex/skills/claude-code-delegate`
+- `~/.agents/skills`
+
+제외 대상:
+
+- 세션 로그
+- 프로젝트 메모리
+- 캐시
+- 텔레메트리
+- 백업
+- 인증 파일
+- `.auth`
+- `.venv`
+- `.git`
+- `__pycache__`
+- `.DS_Store`
+
+수동 실행:
+
+```bash
+python3 scripts/sync-local-infra.py --push
+```
+
+macOS launchd 자동화 설치:
+
+```bash
+mkdir -p ~/Library/LaunchAgents
+cp automation/com.chickengir1.agent-orchestration-infra-sync.plist ~/Library/LaunchAgents/
+launchctl unload ~/Library/LaunchAgents/com.chickengir1.agent-orchestration-infra-sync.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.chickengir1.agent-orchestration-infra-sync.plist
+```
+
+자동화는 지정된 경로 변경을 감지하면 실행되고, 보조적으로 10분마다 한 번씩 실행됩니다. diff가 없으면 커밋하지 않습니다. diff가 있으면 `Sync local agent orchestration infra (...)` 메시지로 커밋하고 push합니다.
+
 Codex:
 
 - `fundamental-reviewer`

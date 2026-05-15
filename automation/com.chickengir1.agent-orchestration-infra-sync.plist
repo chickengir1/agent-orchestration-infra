@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.chickengir1.agent-orchestration-infra-sync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/leegangho/agent-orchestration-infra/scripts/sync-local-infra.py</string>
+    <string>--repo</string>
+    <string>/Users/leegangho/agent-orchestration-infra</string>
+    <string>--push</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/leegangho/agent-orchestration-infra</string>
+
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/leegangho/.claude/agents</string>
+    <string>/Users/leegangho/.claude/skills</string>
+    <string>/Users/leegangho/.codex/agents</string>
+    <string>/Users/leegangho/.codex/skills</string>
+    <string>/Users/leegangho/.agents/skills</string>
+  </array>
+
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/leegangho/agent-orchestration-infra/.sync-local-infra.out.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/leegangho/agent-orchestration-infra/.sync-local-infra.err.log</string>
+</dict>
+</plist>
