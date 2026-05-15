@@ -91,6 +91,27 @@ def compare_flow_step(a_cap: dict | None, b_cap: dict | None) -> dict | None:
     return compare_page(wrap(a_cap), wrap(b_cap))
 
 
+def compare_settled_snapshot(a_cap: dict, b_cap: dict) -> dict | None:
+    """Compare delayed settled snapshots when both sides captured one."""
+    a_settled = a_cap.get("settled")
+    b_settled = b_cap.get("settled")
+    if not isinstance(a_settled, dict) or not isinstance(b_settled, dict):
+        return None
+
+    def wrap(parent: dict, settled: dict) -> dict:
+        return {
+            "status": parent.get("status"),
+            "finalUrl": settled.get("finalUrl", ""),
+            "view": settled.get("view", {}),
+            "actions": settled.get("actions", []),
+            "console": parent.get("console", []),
+            "pageerror": parent.get("pageerror", []),
+            "requestfailed": parent.get("requestfailed", []),
+        }
+
+    return compare_page(wrap(a_cap, a_settled), wrap(b_cap, b_settled))
+
+
 def flow_step_has_signal(step_diff: dict | None) -> bool:
     if step_diff is None:
         return False
@@ -325,6 +346,35 @@ def page_has_signal(d: dict) -> bool:
     return False
 
 
+def invalid_capture_reason(expected: str | None, a_cap: dict, b_cap: dict, mismatched: list[str]) -> dict:
+    final_a = a_cap.get("finalPath")
+    final_b = b_cap.get("finalPath")
+    actions_a = len(a_cap.get("actions") or [])
+    actions_b = len(b_cap.get("actions") or [])
+    attempts_a = a_cap.get("captureAttempts") or []
+    attempts_b = b_cap.get("captureAttempts") or []
+    if final_a == "blank" and final_b == "blank" and actions_a == 0 and actions_b == 0:
+        kind = "capture-not-ready"
+        message = "A and B stayed on about:blank with zero actions; likely capture timing or navigation setup failure"
+    elif final_a == final_b and final_a != expected:
+        kind = "plan-expectedFinalPath-mismatch"
+        message = "A and B reached the same non-expected path; expectedFinalPath likely needs correction"
+    elif len(mismatched) == 1:
+        kind = "side-specific-navigation"
+        message = f"{mismatched[0]} did not reach expected path"
+    else:
+        kind = "both-sides-navigation"
+        message = "A and B did not reach expected path"
+    return {
+        "kind": kind,
+        "message": message,
+        "actionsA": actions_a,
+        "actionsB": actions_b,
+        "attemptsA": attempts_a,
+        "attemptsB": attempts_b,
+    }
+
+
 def _rel(path: Path, root: Path) -> str:
     try:
         return str(path.relative_to(root))
@@ -449,17 +499,30 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
             if final_b != expected:
                 mismatched.append("B")
         if mismatched:
+            reason = invalid_capture_reason(expected, a_cap, b_cap, mismatched)
             invalid.append({
                 "scenarioId": sid,
                 "expected": expected,
                 "finalPathA": final_a,
                 "finalPathB": final_b,
                 "mismatched": mismatched,
+                "reasonKind": reason["kind"],
+                "reason": reason["message"],
+                "actionsA": reason["actionsA"],
+                "actionsB": reason["actionsB"],
+                "attemptsA": reason["attemptsA"],
+                "attemptsB": reason["attemptsB"],
             })
             continue
 
         diff_entry = compare_page(a_cap, b_cap)
         noise = split_noise(diff_entry, patterns)
+        settled_diff = compare_settled_snapshot(a_cap, b_cap)
+        settled_noise = None
+        transient_page_diff = False
+        if settled_diff is not None:
+            settled_noise = split_noise(settled_diff, patterns)
+            transient_page_diff = page_has_signal(diff_entry) and not page_has_signal(settled_diff)
         a_dir = a_side[sid]["page_dir"]
         b_dir = b_side[sid]["page_dir"]
 
@@ -510,6 +573,9 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
         pages[sid] = {
             "diff": diff_entry,
             "noise": noise,
+            "settledDiff": settled_diff,
+            "settledNoise": settled_noise,
+            "transientPageDiff": transient_page_diff,
             "flowResults": flow_results,
             "screenshotA": _rel(a_dir / "page.png", run_dir),
             "screenshotB": _rel(b_dir / "page.png", run_dir),
@@ -589,6 +655,8 @@ def _render_page_capture(d: dict, page_entry: dict) -> list[str]:
     out.append("- screenshot path:")
     out.append(f"  - A: {page_entry['screenshotA']}")
     out.append(f"  - B: {page_entry['screenshotB']}")
+    if page_entry.get("transientPageDiff"):
+        out.append("- timing: initial snapshot differs, delayed settled snapshot has no remaining page/action/runtime diff")
 
     if d["status"]["a"] != d["status"]["b"]:
         out.append(f"- status: A={d['status']['a']} / B={d['status']['b']}")
@@ -828,10 +896,13 @@ def render_report(diff: dict) -> str:
     cat_actions = 0
     cat_flows = 0
     cat_console = 0
+    transient_pages = 0
     for sid, entry in diff["pages"].items():
         d = entry["diff"]
         flow_results = entry.get("flowResults") or []
         flow_signal = has_flow_signal(flow_results)
+        if entry.get("transientPageDiff"):
+            transient_pages += 1
         if page_has_signal(d) or flow_signal:
             with_diff.append(sid)
             if has_page_capture_diff(d):
@@ -850,6 +921,7 @@ def render_report(diff: dict) -> str:
     lines.append(f"- scenarios with differences: {len(with_diff)}")
     lines.append(f"- noise-only scenarios: {len(noise_only)}")
     lines.append(f"- invalid captures: {len(invalid)}")
+    lines.append(f"- transient page diffs: {transient_pages}")
     lines.append(f"- A-only scenarios: {len(diff['aOnly'])}")
     lines.append(f"- B-only scenarios: {len(diff['bOnly'])}")
     if not diff.get("planLoaded"):
@@ -881,7 +953,10 @@ def render_report(diff: dict) -> str:
             lines.append(f"- expected: {inv['expected']}")
             lines.append(f"- A finalPath: {inv['finalPathA']}")
             lines.append(f"- B finalPath: {inv['finalPathB']}")
-            lines.append(f"- reason: {', '.join(inv['mismatched'])} did not reach expected path")
+            lines.append(f"- reason: {inv.get('reason') or ', '.join(inv['mismatched']) + ' did not reach expected path'}")
+            if inv.get("reasonKind"):
+                lines.append(f"- reasonKind: {inv['reasonKind']}")
+            lines.append(f"- actions: A={inv.get('actionsA')} B={inv.get('actionsB')}")
             lines.append("- deep diff: skipped")
             lines.append("")
 

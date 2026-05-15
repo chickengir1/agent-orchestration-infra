@@ -348,6 +348,82 @@ def case_invalid_capture_section_in_report() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_invalid_about_blank_classified_capture_not_ready() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-blank", BASELINE,
+                          expected_final_path="/sample", final_path="blank")
+        b = _scenario_cap("scenario-blank", BASELINE,
+                          expected_final_path="/sample", final_path="blank")
+        for cap in (a, b):
+            cap["finalUrl"] = "about:blank"
+            cap["actions"] = []
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run)
+        invalid = diff["invalidCaptures"][0]
+        if invalid.get("reasonKind") != "capture-not-ready":
+            fail("invalid_about_blank_classified_capture_not_ready",
+                 "blank/zero-action invalid must be classified as capture-not-ready",
+                 invalid)
+        report = render_report(diff)
+        if "capture-not-ready" not in report:
+            fail("invalid_about_blank_classified_capture_not_ready",
+                 "reasonKind missing in report", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_invalid_same_non_expected_path_classified_plan_mismatch() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-redirect", BASELINE,
+                          expected_final_path="/expected", final_path="/actual")
+        b = _scenario_cap("scenario-redirect", BASELINE,
+                          expected_final_path="/expected", final_path="/actual")
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run)
+        invalid = diff["invalidCaptures"][0]
+        if invalid.get("reasonKind") != "plan-expectedFinalPath-mismatch":
+            fail("invalid_same_non_expected_path_classified_plan_mismatch",
+                 "same non-expected path should point at expectedFinalPath correction",
+                 invalid)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_transient_page_diff_detected_from_settled_snapshot() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-transient", BASELINE)
+        b = _scenario_cap("scenario-transient", BASELINE)
+        b["view"]["classes"]["btn-block"] = 1
+        a["settled"] = {
+            "finalUrl": a["finalUrl"],
+            "finalPath": a["finalPath"],
+            "view": copy.deepcopy(BASELINE["view"]),
+            "actions": copy.deepcopy(BASELINE["actions"]),
+        }
+        b["settled"] = copy.deepcopy(a["settled"])
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run)
+        entry = diff["pages"]["scenario-transient"]
+        if not entry.get("transientPageDiff"):
+            fail("transient_page_diff_detected_from_settled_snapshot",
+                 "initial-only diff should be marked transient", entry)
+        report = render_report(diff)
+        if "transient page diffs: 1" not in report or "initial snapshot differs" not in report:
+            fail("transient_page_diff_detected_from_settled_snapshot",
+                 "transient summary/detail missing", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_no_signal_scenario_omitted_from_differences() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
@@ -1081,6 +1157,9 @@ CASES = [
     case_capture_output_dir_name_uses_branch_slug,
     case_expectedfinalpath_mismatch_skips_deep_diff,
     case_invalid_capture_section_in_report,
+    case_invalid_about_blank_classified_capture_not_ready,
+    case_invalid_same_non_expected_path_classified_plan_mismatch,
+    case_transient_page_diff_detected_from_settled_snapshot,
     case_no_signal_scenario_omitted_from_differences,
     case_noise_candidate_separated,
     case_schema_allows_label_array_and_metadata_object,

@@ -44,6 +44,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--side", required=True, choices=["A", "B"])
     ap.add_argument("--out", required=True, help="Run directory; <out>/<branchName>/... is produced")
     ap.add_argument("--timeout", type=int, default=10000)
+    ap.add_argument("--retries", type=int, default=2, help="Retry a scenario when capture stays on about:blank")
+    ap.add_argument("--settled-snapshot-ms", type=int, default=1000,
+                    help="Write a second settled snapshot after this delay; 0 disables it")
     return ap.parse_args()
 
 
@@ -77,6 +80,73 @@ def url_path(url: str) -> str:
         return urlsplit(url or "").path or "/"
     except ValueError:
         return ""
+
+
+def absolute_target_url(base: str, path: str) -> str:
+    if re.match(r"^https?://", path or ""):
+        return path
+    return f"{base.rstrip('/')}/{(path or '').lstrip('/')}"
+
+
+def snapshot_page(page, extract_js: str) -> dict:
+    surface = page.evaluate(extract_js, {"masks": []}) or {}
+    return {
+        "finalUrl": page.url,
+        "finalPath": url_path(page.url),
+        "meta": surface.get("meta", {}),
+        "view": surface.get("view", {}),
+        "actions": surface.get("actions", []),
+    }
+
+
+def capture_scenario_page(page, *, target_url: str, timeout: int, retries: int) -> tuple[str, dict, list[dict]]:
+    attempts: list[dict] = []
+    status = "ok"
+    surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
+    total_attempts = max(retries, 0) + 1
+    for attempt in range(1, total_attempts + 1):
+        status = "ok"
+        try:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=timeout)
+            try:
+                page.wait_for_load_state("networkidle", timeout=timeout)
+            except PWTimeout:
+                pass
+            page.wait_for_timeout(500)
+            stability_timeout = min(max(timeout // 2, 2000), 5000)
+            final_url = wait_for_route_stability(page, timeout_ms=stability_timeout)
+            surface = snapshot_page(page, EXTRACT_JS)
+            # Keep the stable URL if evaluate changed nothing but page.url was
+            # observed through the route-stability loop.
+            surface["finalUrl"] = surface.get("finalUrl") or final_url
+            surface["finalPath"] = surface.get("finalPath") or url_path(final_url)
+        except PWTimeout:
+            status = "timeout"
+            surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
+        except Exception as e:
+            status = "error"
+            surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
+            attempts.append({
+                "attempt": attempt,
+                "status": status,
+                "finalUrl": surface["finalUrl"],
+                "finalPath": surface["finalPath"],
+                "error": str(e),
+            })
+            break
+
+        attempts.append({
+            "attempt": attempt,
+            "status": status,
+            "finalUrl": surface["finalUrl"],
+            "finalPath": surface["finalPath"],
+            "whiteScreen": len(surface.get("actions") or []) == 0,
+        })
+        if surface["finalUrl"] != "about:blank":
+            break
+        if attempt < total_attempts:
+            page.wait_for_timeout(1000)
+    return status, surface, attempts
 
 
 def wait_for_route_stability(
@@ -350,25 +420,28 @@ def main() -> int:
             page.on("requestfailed", lambda req: req_fail.append({"url": req.url, "failure": req.failure}))
 
             status = "ok"
-            final_url = ""
-            surface = {"view": {}, "actions": [], "meta": {}}
-            try:
-                page.goto(target_path, wait_until="domcontentloaded", timeout=args.timeout)
+            target_url = absolute_target_url(base, target_path)
+            status, surface, attempts = capture_scenario_page(
+                page,
+                target_url=target_url,
+                timeout=args.timeout,
+                retries=args.retries,
+            )
+            if attempts and attempts[-1].get("error"):
+                err_buf.append(f"capture: {attempts[-1]['error']}")
+
+            settled = None
+            if args.settled_snapshot_ms > 0 and surface.get("finalUrl") != "about:blank":
                 try:
-                    page.wait_for_load_state("networkidle", timeout=args.timeout)
-                except PWTimeout:
-                    pass
-                page.wait_for_timeout(500)
-                stability_timeout = min(max(args.timeout // 2, 2000), 5000)
-                final_url = wait_for_route_stability(page, timeout_ms=stability_timeout)
-                surface = page.evaluate(EXTRACT_JS, {"masks": []}) or surface
-            except PWTimeout:
-                status = "timeout"
-                final_url = page.url
-            except Exception as e:
-                status = "error"
-                err_buf.append(f"capture: {e}")
-                final_url = page.url
+                    page.wait_for_timeout(args.settled_snapshot_ms)
+                    wait_for_route_stability(
+                        page,
+                        stability_ms=400,
+                        timeout_ms=min(max(args.timeout // 2, 2000), 5000),
+                    )
+                    settled = snapshot_page(page, EXTRACT_JS)
+                except Exception as e:
+                    err_buf.append(f"settled snapshot: {e}")
 
             page_dir = side_dir / ctx_id / "pages" / scenario_id
             page_dir.mkdir(parents=True, exist_ok=True)
@@ -383,8 +456,10 @@ def main() -> int:
                 "path": target_path,
                 "expectedFinalPath": expected,
                 "status": status,
-                "finalUrl": final_url,
-                "finalPath": url_path(final_url),
+                "finalUrl": surface.get("finalUrl", ""),
+                "finalPath": surface.get("finalPath", ""),
+                "captureAttempts": attempts,
+                "settled": settled,
                 "meta": surface.get("meta", {}),
                 "view": surface.get("view", {}),
                 "actions": surface.get("actions", []),
