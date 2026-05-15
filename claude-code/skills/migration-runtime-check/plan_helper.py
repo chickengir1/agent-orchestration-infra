@@ -30,6 +30,8 @@ import re
 import sys
 from pathlib import Path
 
+from contract import validate_check_plan
+
 
 SLUG_RE = re.compile(r"[^a-z0-9-]+")
 PLACEHOLDER_RE = re.compile(r":[A-Za-z_][A-Za-z0-9_]*")
@@ -108,12 +110,13 @@ def build_plan(args: argparse.Namespace) -> dict:
         seen_ids.add(scenario_id)
         scenarios.append({
             "id": scenario_id,
-            "reason": "auto-generated from discover; review before approval",
+            "reason": "auto-generated from discover; no flows selected",
             "routeTemplate": route,
             "context": args.context_id,
             "path": concrete,
             "expectedFinalPath": concrete,
             "compare": ["page-capture", "action-surface", "user-flows", "console-runtime"],
+            "flows": [],
         })
 
     plan = {
@@ -166,6 +169,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     plan = build_plan(args)
+    validate_check_plan(plan)
     json.dump(plan, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     return 0

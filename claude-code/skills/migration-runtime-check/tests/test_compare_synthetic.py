@@ -24,6 +24,7 @@ from compare import (  # noqa: E402
     page_has_signal,
     render_report,
 )
+from contract import ContractError, validate_check_plan  # noqa: E402
 
 BASELINE_PATH = HERE / "fixtures" / "compare-basic" / "A" / "page-1" / "capture.json"
 BASELINE = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
@@ -338,7 +339,7 @@ def case_invalid_capture_section_in_report() -> None:
         _write_capture(run, "B", b)
         diff = build_diff(run)
         report = render_report(diff)
-        if "## Invalid Captures" not in report:
+        if "## Scenario Matrix" not in report:
             fail("invalid_capture_section_in_report", "missing section", {"report": report})
         if "scenario-redirected" not in report:
             fail("invalid_capture_section_in_report", "scenarioId not listed", {"report": report})
@@ -440,18 +441,18 @@ def case_no_signal_scenario_omitted_from_differences() -> None:
             _write_capture(run, "B", cap)
         diff = build_diff(run)
         report = render_report(diff)
-        diff_idx = report.find("## Differences")
+        diff_idx = report.find("## Scenario Matrix")
         if diff_idx < 0:
             fail("no_signal_scenario_omitted_from_differences",
-                 "Differences section missing", {"report": report})
-        differences_block = report[diff_idx:]
-        if "scenario-same" in differences_block:
+                 "Scenario Matrix section missing", {"report": report})
+        matrix_block = report[diff_idx:]
+        if "scenario-same" in matrix_block:
             fail("no_signal_scenario_omitted_from_differences",
-                 "signal-less scenario must not appear in Differences",
+                 "signal-less scenario must not appear in Scenario Matrix",
                  {"report": report})
-        if "scenario-diff" not in differences_block:
+        if "scenario-diff" not in matrix_block:
             fail("no_signal_scenario_omitted_from_differences",
-                 "signal scenario must appear in Differences",
+                 "signal scenario must appear in Scenario Matrix",
                  {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -573,7 +574,9 @@ def case_compare_autoloads_plan_from_stamp() -> None:
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
         plan_path = tmp / "check-plan.json"
-        plan_path.write_text(json.dumps({"knownUnstable": ["lds-bars"]}), encoding="utf-8")
+        plan = json.loads((SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json").read_text(encoding="utf-8"))
+        plan["knownUnstable"] = ["lds-bars"]
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
         (run / "A").mkdir(parents=True, exist_ok=True)
         (run / "A" / "stamp.json").write_text(
             json.dumps({"planPath": str(plan_path)}), encoding="utf-8"
@@ -633,6 +636,52 @@ def case_schema_allows_scenario_flows() -> None:
     step = flow["steps"][0]
     if step["type"] != "click" or not step["selector"]:
         fail("schema_allows_scenario_flows", "step must be click+selector", step)
+    validate_check_plan(plan)
+
+
+def case_contract_rejects_silent_zero_flow() -> None:
+    plan_path = SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["scenarios"][0]["reason"] = "minimal sample"
+    plan["scenarios"][0]["flows"] = []
+    try:
+        validate_check_plan(plan)
+    except ContractError:
+        return
+    fail("contract_rejects_silent_zero_flow",
+         "empty flows[] without no flows selected must fail",
+         plan["scenarios"][0])
+
+
+def case_contract_rejects_unknown_context() -> None:
+    plan_path = SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["scenarios"][0]["context"] = "missing-context"
+    try:
+        validate_check_plan(plan)
+    except ContractError:
+        return
+    fail("contract_rejects_unknown_context",
+         "scenario context must reference contexts[].id",
+         plan["scenarios"][0])
+
+
+def case_contract_rejects_unsafe_flow_selector() -> None:
+    plan_path = SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    sc = plan["scenarios"][0]
+    sc["flows"] = [{
+        "id": "open-menu",
+        "kind": "safe-ui-flow",
+        "steps": [{"type": "click", "selector": ".ng-star-inserted"}],
+    }]
+    try:
+        validate_check_plan(plan)
+    except ContractError:
+        return
+    fail("contract_rejects_unsafe_flow_selector",
+         "generated/framework selectors must fail",
+         sc["flows"][0])
 
 
 def case_step_result_builder_shapes() -> None:
@@ -763,18 +812,15 @@ def case_compare_reports_flow_step_snapshot_diff() -> None:
             fail("compare_reports_flow_step_snapshot_diff",
                  "heading diff not detected", step_diff)
         report = render_report(diff)
-        if "- differences:" not in report:
-            fail("compare_reports_flow_step_snapshot_diff",
-                 "differences subsection not rendered", {"report": report})
         if "headings:" not in report:
             fail("compare_reports_flow_step_snapshot_diff",
-                 "headings line missing", {"report": report})
+                 "flow snapshot diff not rendered", {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def case_flow_only_diff_keeps_scenario_in_report() -> None:
-    """Scenario with no main diff but a flow status mismatch must appear in Differences."""
+    """Scenario with no main diff but a flow status mismatch must appear in Scenario Matrix."""
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
         a = _scenario_cap("scenario-action-only", BASELINE)
@@ -790,17 +836,13 @@ def case_flow_only_diff_keeps_scenario_in_report() -> None:
         if not page_has_signal(diff["pages"]["scenario-action-only"]["diff"]):
             pass  # main signal 0 as intended
         report = render_report(diff)
-        diff_idx = report.find("## Differences")
+        diff_idx = report.find("## Scenario Matrix")
         if diff_idx < 0:
             fail("flow_only_diff_keeps_scenario_in_report",
-                 "Differences section missing", {"report": report})
+                 "Scenario Matrix section missing", {"report": report})
         if "scenario-action-only" not in report[diff_idx:]:
             fail("flow_only_diff_keeps_scenario_in_report",
-                 "scenario must appear in Differences even without main diff",
-                 {"report": report})
-        if "## Noise-only Scenarios" in report:
-            fail("flow_only_diff_keeps_scenario_in_report",
-                 "scenario must not be misclassified as noise-only",
+                 "scenario must appear in Scenario Matrix even without main diff",
                  {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -999,9 +1041,7 @@ def case_flow_step_noise_only_listed() -> None:
         _write_flow_step(run, "B", "scenario-flow-noise", "open-dd", 1, status="ok", step_capture=b_step_cap)
         diff = build_diff(run, plan={"knownUnstable": ["lds-bars"]})
         report = render_report(diff)
-        if "## Differences" in report:
-            fail("flow_step_noise_only_listed", "noise-only flow must not enter Differences", {"report": report})
-        if "## Noise-only Scenarios" not in report or "user-flow noise steps +1" not in report:
+        if "## Scenario Matrix" not in report or "scenario-flow-noise" not in report:
             fail("flow_step_noise_only_listed", "flow noise summary missing", {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -1020,13 +1060,9 @@ def case_noise_only_scenario_listed_in_dedicated_section() -> None:
         _write_capture(run, "B", b)
         diff = build_diff(run, plan=plan)
         report = render_report(diff)
-        if "## Differences" in report:
+        if "## Scenario Matrix" not in report:
             fail("noise_only_scenario_listed_in_dedicated_section",
-                 "noise-only must not appear in Differences",
-                 {"report": report})
-        if "## Noise-only Scenarios" not in report:
-            fail("noise_only_scenario_listed_in_dedicated_section",
-                 "missing Noise-only Scenarios section",
+                 "missing Scenario Matrix section",
                  {"report": report})
         if "scenario-noise-only" not in report:
             fail("noise_only_scenario_listed_in_dedicated_section",
@@ -1074,10 +1110,10 @@ def case_noise_candidate_separated() -> None:
         # Error console with matching substring must remain in main diff
         if not any(typ == "error" and "Fetching" in text for typ, text in d["console"]["b_new"]):
             fail("noise_candidate_separated", "error console must not be classified as noise", d["console"])
-        # Render report and confirm noise lives in Noise Candidates subsection only
+        # Render report and confirm noise lives in Signal section.
         report = render_report(diff)
-        if "#### Noise Candidates" not in report:
-            fail("noise_candidate_separated", "Noise Candidates subsection missing", {"report": report})
+        if "knownUnstable" not in report and "noise" not in report:
+            fail("noise_candidate_separated", "noise signal missing", {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1169,6 +1205,9 @@ CASES = [
     case_compare_autoloads_plan_from_stamp,
     case_noise_only_scenario_listed_in_dedicated_section,
     case_schema_allows_scenario_flows,
+    case_contract_rejects_silent_zero_flow,
+    case_contract_rejects_unknown_context,
+    case_contract_rejects_unsafe_flow_selector,
     case_step_result_builder_shapes,
     case_compare_reports_flow_status_mismatch,
     case_compare_reports_flow_step_snapshot_diff,

@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from contract import ContractError, validate_check_plan
+
 
 FRAMEWORK_CLASS_RE = re.compile(r"^(cdk-|ng-|mat-mdc-|_ngcontent|_nghost)")
 
@@ -527,8 +529,10 @@ def autoload_plan(run_dir: Path) -> dict | None:
         p = Path(plan_path)
         if p.is_file():
             try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
+                plan = json.loads(p.read_text(encoding="utf-8"))
+                validate_check_plan(plan)
+                return plan
+            except (json.JSONDecodeError, ContractError):
                 continue
     return None
 
@@ -576,6 +580,15 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
                 "actionsB": reason["actionsB"],
                 "attemptsA": reason["attemptsA"],
                 "attemptsB": reason["attemptsB"],
+                "screenshotA": _rel(a_side[sid]["page_dir"] / "page.png", run_dir),
+                "screenshotB": _rel(b_side[sid]["page_dir"] / "page.png", run_dir),
+                "context": {
+                    "auth": b_cap.get("auth"),
+                    "contextId": b_cap.get("contextId"),
+                    "vars": b_cap.get("vars", {}),
+                    "labels": b_cap.get("labels", []),
+                    "metadata": b_cap.get("metadata", {}),
+                },
             })
             continue
 
@@ -644,6 +657,9 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
             "flowResults": flow_results,
             "screenshotA": _rel(a_dir / "page.png", run_dir),
             "screenshotB": _rel(b_dir / "page.png", run_dir),
+            "expected": expected,
+            "finalPathA": final_a,
+            "finalPathB": final_b,
             "context": {
                 "auth": b_cap.get("auth"),
                 "contextId": b_cap.get("contextId"),
@@ -937,26 +953,60 @@ def _render_flow_results(results: list[dict]) -> list[str]:
     return out
 
 
-_RETROSPECTIVE_TEMPLATE = """## Engineering Retrospective
+def _render_scenario_ab(*, expected: str | None, final_a: str | None, final_b: str | None,
+                        screenshot_a: str | None, screenshot_b: str | None) -> list[str]:
+    out = ["#### Scenario (A/B)"]
+    out.append(f"- expectedFinalPath: {expected}")
+    out.append(f"- A finalPath: {final_a}")
+    out.append(f"- B finalPath: {final_b}")
+    if screenshot_a or screenshot_b:
+        out.append("- screenshot:")
+        if screenshot_a:
+            out.append(f"  - A: {screenshot_a}")
+        if screenshot_b:
+            out.append(f"  - B: {screenshot_b}")
+    return out
 
-_사람이 작성. 도구가 자동 생성하지 않음._
 
-### Prediction From Code / Plan
-- 어떤 scenario 가 위험하다고 봤는지
-- 왜 그 scenario 를 골랐는지
-- 어떤 차이를 예상했는지
+def _render_signal_block(entry: dict) -> list[str]:
+    out: list[str] = ["#### Signal"]
+    d = entry["diff"]
+    if entry.get("transientPageDiff"):
+        out.append("- transient: initial snapshot differs, delayed settled snapshot has no remaining page/action/runtime diff")
+    if has_page_capture_diff(d):
+        for line in _render_page_capture(d, entry):
+            if line.startswith("####") or line == "- screenshot path:" or line.startswith("  - A:") or line.startswith("  - B:"):
+                continue
+            if line.startswith("- timing:"):
+                continue
+            out.append(line)
+    if has_actions_diff(d):
+        out.extend(_render_actions(d)[1:])
+    if has_console_diff(d):
+        out.extend(_render_console_runtime(d)[1:])
+    flow_results = entry.get("flowResults") or []
+    if has_flow_signal(flow_results) or has_flow_noise(flow_results):
+        out.extend(_render_flow_results(flow_results)[1:])
+    if has_noise(entry["noise"]):
+        out.extend(_render_noise_candidates(entry["noise"])[1:])
+    return out if len(out) > 1 else ["#### Signal", "- none"]
 
-### Actual Runtime Evidence
-- 실제 캡처에서 나온 차이
-- invalid capture
-- noise
-- 진짜 확인 필요한 항목
 
-### Judgment
-- 도구가 신뢰 가능하게 동작했는지
-- migration 회귀로 단정 가능한 항목이 있는지
-- 다음 보강점
-"""
+def _render_investigation_block(entry: dict) -> list[str]:
+    out: list[str] = ["#### Investigation"]
+    if entry.get("codebaseSearch"):
+        out.extend(_render_codebase_search(entry["codebaseSearch"])[1:])
+    else:
+        out.append("- codebase search: no direct candidates")
+    if entry.get("transientPageDiff"):
+        out.append("- next action: transient 후보. 필요하면 timing 재현 또는 settled-only 비교")
+    elif has_console_diff(entry["diff"]) or has_actions_diff(entry["diff"]) or has_page_capture_diff(entry["diff"]):
+        out.append("- next action: 코드 조사 후보")
+    elif has_noise(entry["noise"]):
+        out.append("- next action: knownUnstable noise 후보")
+    else:
+        out.append("- next action: none")
+    return out
 
 
 def render_report(diff: dict) -> str:
@@ -1019,84 +1069,64 @@ def render_report(diff: dict) -> str:
             lines.append(f"- {sid}")
         lines.append("")
 
-    if invalid:
-        lines.append("## Invalid Captures")
+    matrix_ids = list(invalid) + [{"scenarioId": sid, "pageEntry": diff["pages"][sid]} for sid in with_diff + noise_only]
+    if matrix_ids:
+        lines.append("## Scenario Matrix")
         lines.append("")
-        for inv in invalid:
-            lines.append(f"### {inv['scenarioId']}")
-            lines.append(f"- expected: {inv['expected']}")
-            lines.append(f"- A finalPath: {inv['finalPathA']}")
-            lines.append(f"- B finalPath: {inv['finalPathB']}")
-            lines.append(f"- reason: {inv.get('reason') or ', '.join(inv['mismatched']) + ' did not reach expected path'}")
+        for item in matrix_ids:
+            sid = item["scenarioId"]
+            lines.append(f"### {sid}")
+            if "pageEntry" in item:
+                entry = item["pageEntry"]
+                lines.append("#### Meta")
+                lines.extend(_render_context_header(entry["context"])[1:])
+                lines.append("")
+                lines.extend(_render_scenario_ab(
+                    expected=entry.get("expected"),
+                    final_a=entry.get("finalPathA"),
+                    final_b=entry.get("finalPathB"),
+                    screenshot_a=entry["screenshotA"],
+                    screenshot_b=entry["screenshotB"],
+                ))
+                lines.append("")
+                lines.extend(_render_signal_block(entry))
+                lines.append("")
+                lines.extend(_render_investigation_block(entry))
+                lines.append("")
+                continue
+
+            inv = item
+            lines.append("#### Meta")
+            lines.extend(_render_context_header(inv.get("context") or {})[1:])
+            lines.append("")
+            lines.extend(_render_scenario_ab(
+                expected=inv.get("expected"),
+                final_a=inv.get("finalPathA"),
+                final_b=inv.get("finalPathB"),
+                screenshot_a=inv.get("screenshotA"),
+                screenshot_b=inv.get("screenshotB"),
+            ))
+            lines.append("")
+            lines.append("#### Signal")
+            lines.append(f"- invalid: {inv.get('reason') or ', '.join(inv['mismatched']) + ' did not reach expected path'}")
             if inv.get("reasonKind"):
                 lines.append(f"- reasonKind: {inv['reasonKind']}")
             lines.append(f"- actions: A={inv.get('actionsA')} B={inv.get('actionsB')}")
             lines.append("- deep diff: skipped")
             lines.append("")
-
-    if with_diff:
-        lines.append("## Differences")
-        lines.append("")
-        for sid in with_diff:
-            entry = diff["pages"][sid]
-            d = entry["diff"]
-            flow_results = entry.get("flowResults") or []
-            lines.append(f"### {sid}")
-            lines.extend(_render_context_header(entry["context"]))
-            lines.append("")
-            if has_page_capture_diff(d):
-                lines.extend(_render_page_capture(d, entry))
-                lines.append("")
+            lines.append("#### Investigation")
+            if inv.get("reasonKind") == "capture-not-ready":
+                lines.append("- next action: retry 후보 또는 capture timing/dev server/auth 확인")
+            elif inv.get("reasonKind") == "plan-expectedFinalPath-mismatch":
+                lines.append("- next action: expectedFinalPath 보정 후보")
             else:
-                # Page Capture sub-section still anchors screenshot evidence
-                lines.append("#### Page Capture")
-                lines.append("- screenshot path:")
-                lines.append(f"  - A: {entry['screenshotA']}")
-                lines.append(f"  - B: {entry['screenshotB']}")
-                lines.append("")
-            if has_actions_diff(d):
-                lines.extend(_render_actions(d))
-                lines.append("")
-            if has_console_diff(d):
-                lines.extend(_render_console_runtime(d))
-                lines.append("")
-            if has_flow_signal(flow_results) or has_flow_noise(flow_results):
-                lines.extend(_render_flow_results(flow_results))
-                lines.append("")
-            if has_noise(entry["noise"]):
-                lines.extend(_render_noise_candidates(entry["noise"]))
-                lines.append("")
-            if entry.get("codebaseSearch"):
-                lines.extend(_render_codebase_search(entry["codebaseSearch"]))
-                lines.append("")
-
-    if noise_only:
-        lines.append("## Noise-only Scenarios")
-        lines.append("")
-        for sid in noise_only:
-            entry = diff["pages"][sid]
-            noise = entry["noise"]
-            tags: list[str] = []
-            if noise["classes_added"] or noise["classes_removed"] or noise["classes_changed"]:
-                tags.append(
-                    f"classes +{len(noise['classes_added'])} "
-                    f"-{len(noise['classes_removed'])} Δ{len(noise['classes_changed'])}"
-                )
-            if noise["texts_added"]:
-                tags.append(f"texts +{len(noise['texts_added'])}")
-            if noise["console_b_new"]:
-                tags.append(f"console (non-error) +{len(noise['console_b_new'])}")
-            flow_noise_count = sum(1 for result in entry.get("flowResults", []) if has_noise(result.get("stepNoise") or {}))
-            if flow_noise_count:
-                tags.append(f"user-flow noise steps +{flow_noise_count}")
-            lines.append(f"- {sid}: {'; '.join(tags) or '(empty)'}")
-        lines.append("")
+                lines.append("- next action: navigation 차이 조사 후보")
+            lines.append("")
 
     if not with_diff and not invalid and not noise_only:
         lines.append("_No differences detected on any compared scenario._")
         lines.append("")
 
-    lines.append(_RETROSPECTIVE_TEMPLATE)
     return "\n".join(lines)
 
 
@@ -1115,6 +1145,7 @@ def main() -> int:
     plan = None
     if ns.plan:
         plan = json.loads(Path(ns.plan).read_text(encoding="utf-8"))
+        validate_check_plan(plan)
     else:
         plan = autoload_plan(run_dir)
 

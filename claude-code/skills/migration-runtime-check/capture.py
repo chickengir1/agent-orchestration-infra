@@ -29,6 +29,8 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
+from contract import load_check_plan
+
 SKILL_DIR = Path(__file__).resolve().parent
 EXTRACT_JS = (SKILL_DIR / "extract.js").read_text(encoding="utf-8")
 
@@ -368,7 +370,7 @@ def run_flow_steps(
 
 def main() -> int:
     args = parse_args()
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    plan = load_check_plan(args.plan)
     scenarios: list[dict] = plan.get("scenarios") or []
     if not scenarios:
         print("[capture] check-plan has no scenarios", file=sys.stderr)

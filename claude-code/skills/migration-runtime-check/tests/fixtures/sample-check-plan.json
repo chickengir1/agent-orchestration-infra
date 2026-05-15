@@ -45,12 +45,13 @@
   "scenarios": [
     {
       "id": "sample-default",
-      "reason": "minimal sample for compare-signal tests",
+      "reason": "minimal sample for compare-signal tests; no flows selected",
       "routeTemplate": "/sample",
       "context": "default",
       "path": "/sample",
       "expectedFinalPath": "/sample",
-      "compare": ["page-capture", "action-surface", "user-flows", "console-runtime"]
+      "compare": ["page-capture", "action-surface", "user-flows", "console-runtime"],
+      "flows": []
     }
   ]
 }
