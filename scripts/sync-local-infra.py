@@ -26,6 +26,7 @@ CLAUDE_SKILLS = [
     "edit-pr",
     "fundamental-review",
     "handoff",
+    "migration-runtime-check",
     "reply-review",
     "test-matrix",
     "trace-api",

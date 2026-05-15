@@ -1,0 +1,52 @@
+{
+  "pageId": "page-1",
+  "route": "/sample",
+  "target": "/sample",
+  "status": "ok",
+  "finalUrl": "http://localhost:4200/sample",
+  "meta": {
+    "url": "http://localhost:4200/sample",
+    "pathname": "/sample",
+    "origin": "http://localhost:4200"
+  },
+  "view": {
+    "title": "Sample",
+    "headings": [
+      { "level": 1, "text": "Welcome" },
+      { "level": 2, "text": "Section A" }
+    ],
+    "landmarks": [],
+    "texts": ["Welcome", "Section A", "Footer"],
+    "components": {
+      "app-root": 1,
+      "app-card": 3
+    },
+    "classes": {
+      "btn": 4,
+      "card": 3,
+      "header": 1
+    },
+    "emptyStates": []
+  },
+  "actions": [
+    {
+      "role": "button",
+      "name": "Save",
+      "state": { "disabled": false, "pressed": false, "expanded": false, "selected": false, "required": false, "visible": true },
+      "target": null,
+      "locus": "form"
+    },
+    {
+      "role": "link",
+      "name": "Home",
+      "state": { "disabled": false, "pressed": false, "expanded": false, "selected": false, "required": false, "visible": true },
+      "target": "/home",
+      "locus": "nav"
+    }
+  ],
+  "console": [
+    { "type": "log", "text": "app booted" }
+  ],
+  "pageerror": [],
+  "requestfailed": []
+}
