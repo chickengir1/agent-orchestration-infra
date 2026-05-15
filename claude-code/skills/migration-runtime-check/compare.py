@@ -407,7 +407,16 @@ def _searchable_signal_patterns(diff_entry: dict) -> list[str]:
             patterns.append(text.split(":", 1)[0] if ":" in text else text)
     for text in (diff_entry.get("pageerror") or {}).get("b_new", [])[:5]:
         patterns.append(text.split(":", 1)[0] if ":" in text else text)
-    return [p for p in dict.fromkeys(patterns) if len(p) >= 4]
+    normalized: list[str] = []
+    for pattern in patterns:
+        p = str(pattern).strip().strip("`")
+        # Report rendering prefixes CSS classes with '.', but source files
+        # usually contain class tokens without the dot inside class="...".
+        if p.startswith("."):
+            p = p[1:]
+        if len(p) >= 4:
+            normalized.append(p)
+    return list(dict.fromkeys(normalized))
 
 
 def codebase_search(root: Path | None, diff_entry: dict) -> list[dict]:
@@ -688,6 +697,8 @@ def has_flow_signal(flow_results: list[dict]) -> bool:
     for r in flow_results:
         if r["statusA"] != r["statusB"]:
             return True
+        if r["statusA"] not in ("ok", "missing"):
+            return True
         if flow_step_has_signal(r.get("stepDiff")):
             return True
     return False
@@ -894,6 +905,8 @@ def _render_flow_results(results: list[dict]) -> list[str]:
         out.append(f"  - B: {r['statusB']}")
         if r.get("errorB"):
             out.append(f"    - error: {r['errorB']}")
+        if r["statusA"] == r["statusB"] and r["statusA"] not in ("ok", "missing"):
+            out.append(f"- quality: both-sides-flow-failed ({r['statusA']})")
         if r.get("screenshotA") or r.get("screenshotB"):
             out.append("- screenshot:")
             if r.get("screenshotA"):
@@ -988,6 +1001,7 @@ def _render_signal_block(entry: dict) -> list[str]:
     if has_flow_signal(flow_results) or has_flow_noise(flow_results):
         out.extend(_render_flow_results(flow_results)[1:])
     if has_noise(entry["noise"]):
+        out.append("- noise: knownUnstable candidates")
         out.extend(_render_noise_candidates(entry["noise"])[1:])
     return out if len(out) > 1 else ["#### Signal", "- none"]
 

@@ -143,8 +143,16 @@ def capture_scenario_page(page, *, target_url: str, timeout: int) -> tuple[str, 
     return status, surface, attempts
 
 
-def is_retry_candidate(cap: dict) -> tuple[bool, list[str]]:
+def _matches_known_unstable_requestfailure(entry: dict, known_unstable: list[str]) -> bool:
+    if not known_unstable:
+        return False
+    haystack = f"{entry.get('url', '')} {entry.get('failure', '')}"
+    return any(pattern and pattern in haystack for pattern in known_unstable)
+
+
+def is_retry_candidate(cap: dict, known_unstable: list[str] | None = None) -> tuple[bool, list[str]]:
     reasons: list[str] = []
+    unstable = known_unstable or []
     if cap.get("status") != "ok":
         reasons.append(f"status={cap.get('status')}")
     if cap.get("finalUrl") == "about:blank" or cap.get("finalPath") == "blank":
@@ -155,7 +163,11 @@ def is_retry_candidate(cap: dict) -> tuple[bool, list[str]]:
         reasons.append("zero-actions")
     if cap.get("pageerror"):
         reasons.append("pageerror")
-    if cap.get("requestfailed"):
+    relevant_requestfailed = [
+        entry for entry in (cap.get("requestfailed") or [])
+        if not _matches_known_unstable_requestfailure(entry, unstable)
+    ]
+    if relevant_requestfailed:
         reasons.append("requestfailed")
     return bool(reasons), reasons
 
@@ -498,7 +510,10 @@ def main() -> int:
                 except Exception as e:
                     err_buf.append(f"flow {flow.get('id')} crashed: {e}")
             page.close()
-            retry_candidate, retry_reasons = is_retry_candidate(cap)
+            retry_candidate, retry_reasons = is_retry_candidate(
+                cap,
+                known_unstable=list(plan.get("knownUnstable") or []),
+            )
             cap["retryCandidate"] = retry_candidate
             cap["retryReasons"] = retry_reasons
             (page_dir / "capture.json").write_text(

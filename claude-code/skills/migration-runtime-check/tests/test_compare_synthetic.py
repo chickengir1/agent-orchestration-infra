@@ -220,6 +220,28 @@ def case_framework_class_drop() -> None:
         fail("framework_class_drop", "framework-only noise must not surface as signal", d)
 
 
+def case_codebase_search_strips_class_dot() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        root = tmp / "repo"
+        target = root / "apps" / "sample" / "component.html"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('<button class="btn btn-block">Compose</button>\n', encoding="utf-8")
+        diff_entry = {
+            "components": {"added": [], "removed": [], "changed": []},
+            "classes": {"added": [".btn-block"], "removed": [], "changed": []},
+            "console": {"b_new": []},
+            "pageerror": {"b_new": []},
+        }
+        hits = codebase_search(root, diff_entry)
+        if not hits or hits[0]["pattern"] != "btn-block":
+            fail("codebase_search_strips_class_dot",
+                 "class search must strip leading dot before rg --fixed-strings",
+                 {"hits": hits})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _write_capture(run: Path, side: str, cap: dict) -> Path:
     context_id = cap.get("contextId") or "default"
     d = run / side / context_id / "pages" / cap["scenarioId"]
@@ -808,6 +830,32 @@ def case_compare_reports_flow_status_mismatch() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_compare_reports_both_sides_flow_failure() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-both-flow-failed", BASELINE)
+        b = _scenario_cap("scenario-both-flow-failed", BASELINE)
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        _write_flow_step(run, "A", "scenario-both-flow-failed", "open-dd", 1,
+                         status="selector-not-found", error="0 elements matched")
+        _write_flow_step(run, "B", "scenario-both-flow-failed", "open-dd", 1,
+                         status="selector-not-found", error="0 elements matched")
+        diff = build_diff(run)
+        if "scenario-both-flow-failed" not in diff["pages"]:
+            fail("compare_reports_both_sides_flow_failure",
+                 "same non-ok flow status is plan-quality signal and must keep scenario",
+                 diff)
+        report = render_report(diff)
+        if "both-sides-flow-failed" not in report or "selector-not-found" not in report:
+            fail("compare_reports_both_sides_flow_failure",
+                 "report must surface same non-ok flow status",
+                 {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_compare_reports_flow_step_snapshot_diff() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
@@ -1110,6 +1158,10 @@ def case_noise_only_scenario_listed_in_dedicated_section() -> None:
         if "noise-only scenarios: 1" not in report:
             fail("noise_only_scenario_listed_in_dedicated_section",
                  "Summary count missing", {"report": report})
+        if "- noise:" not in report:
+            fail("noise_only_scenario_listed_in_dedicated_section",
+                 "noise-only Signal must be explicitly labeled as noise",
+                 {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1227,6 +1279,9 @@ CASES = [
     case_classes_removed,
     case_classes_count_changed,
     case_framework_class_drop,
+    case_codebase_search_strips_class_dot,
+    case_capture_ignores_known_unstable_requestfailed_for_retry,
+    case_capture_retries_unknown_requestfailed,
     case_scenarioid_ab_matching,
     case_context_scoped_capture_layout,
     case_branch_named_capture_layout,
@@ -1250,6 +1305,7 @@ CASES = [
     case_contract_rejects_unsafe_flow_selector,
     case_step_result_builder_shapes,
     case_compare_reports_flow_status_mismatch,
+    case_compare_reports_both_sides_flow_failure,
     case_compare_reports_flow_step_snapshot_diff,
     case_flow_only_diff_keeps_scenario_in_report,
     case_unsafe_selector_guard,
