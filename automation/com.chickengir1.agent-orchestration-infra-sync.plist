@@ -18,7 +18,7 @@
   <string>/Users/leegangho/agent-orchestration-infra</string>
 
   <key>StartInterval</key>
-  <integer>604800</integer>
+  <integer>600</integer>
 
   <key>StandardOutPath</key>
   <string>/Users/leegangho/agent-orchestration-infra/.sync-local-infra.out.log</string>
