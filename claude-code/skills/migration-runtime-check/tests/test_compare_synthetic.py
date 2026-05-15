@@ -178,7 +178,8 @@ def case_framework_class_drop() -> None:
 
 
 def _write_capture(run: Path, side: str, cap: dict) -> Path:
-    d = run / side / "pages" / cap["scenarioId"]
+    context_id = cap.get("contextId") or "default"
+    d = run / side / context_id / "pages" / cap["scenarioId"]
     d.mkdir(parents=True, exist_ok=True)
     (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
     return d
@@ -187,6 +188,7 @@ def _write_capture(run: Path, side: str, cap: dict) -> Path:
 def _scenario_cap(scenario_id: str, base: dict, expected_final_path: str | None = None, final_path: str | None = None) -> dict:
     cap = copy.deepcopy(base)
     cap["scenarioId"] = scenario_id
+    cap.setdefault("contextId", "default")
     cap["path"] = f"/{scenario_id}"
     if expected_final_path is not None:
         cap["expectedFinalPath"] = expected_final_path
@@ -210,6 +212,29 @@ def case_scenarioid_ab_matching() -> None:
             fail("scenarioid_ab_matching", "scenario-1 not joined", {"pages": list(diff["pages"])})
         if diff["aOnly"] or diff["bOnly"]:
             fail("scenarioid_ab_matching", "should not be A/B-only", diff)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_context_scoped_capture_layout() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-scoped", BASELINE)
+        b = _scenario_cap("scenario-scoped", BASELINE)
+        for cap in (a, b):
+            cap["contextId"] = "group-356352-school-admin"
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = tmp / "run-x"
+        page_dir = _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        expected_dir = run / "A" / "group-356352-school-admin" / "pages" / "scenario-scoped"
+        if page_dir != expected_dir or not (expected_dir / "capture.json").exists():
+            fail("context_scoped_capture_layout", "capture not written under context-scoped layout", {"page_dir": str(page_dir)})
+        diff = build_diff(run)
+        if "scenario-scoped" not in diff["pages"]:
+            fail("context_scoped_capture_layout", "context-scoped capture not loaded", {"pages": list(diff["pages"])})
+        if diff["pages"]["scenario-scoped"]["context"]["contextId"] != "group-356352-school-admin":
+            fail("context_scoped_capture_layout", "contextId not preserved", diff["pages"]["scenario-scoped"]["context"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -507,8 +532,9 @@ def _write_flow_step(
     run: Path, side: str, scenario_id: str, flow_id: str, step: int,
     *, status: str, error: str | None = None,
     step_capture: dict | None = None,
+    context_id: str = "default",
 ) -> Path:
-    sd = run / side / "pages" / scenario_id / "flows" / flow_id / f"step-{step}"
+    sd = run / side / context_id / "pages" / scenario_id / "flows" / flow_id / f"step-{step}"
     sd.mkdir(parents=True, exist_ok=True)
     step_json = {
         "flowId": flow_id,
@@ -938,6 +964,7 @@ CASES = [
     case_classes_count_changed,
     case_framework_class_drop,
     case_scenarioid_ab_matching,
+    case_context_scoped_capture_layout,
     case_expectedfinalpath_mismatch_skips_deep_diff,
     case_invalid_capture_section_in_report,
     case_no_signal_scenario_omitted_from_differences,

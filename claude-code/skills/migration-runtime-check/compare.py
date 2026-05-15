@@ -5,9 +5,9 @@ Usage:
     python3 -u compare.py <run-dir>
 
 Inputs:
-    <run-dir>/A/pages/<scenarioId>/capture.json
-    <run-dir>/B/pages/<scenarioId>/capture.json
-    <run-dir>/<side>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
+    <run-dir>/A/<contextId>/pages/<scenarioId>/capture.json
+    <run-dir>/B/<contextId>/pages/<scenarioId>/capture.json
+    <run-dir>/<side>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 Outputs:
     <run-dir>/diff.json   (machine)
@@ -100,22 +100,29 @@ def flow_step_has_signal(step_diff: dict | None) -> bool:
 def load_side(run_dir: Path, side: str) -> dict[str, dict]:
     """Return {scenarioId: {"capture": <dict>, "page_dir": Path}}.
 
-    Layout: <run>/<side>/pages/<scenarioId>/capture.json
+    Layout: <run>/<side>/<contextId>/pages/<scenarioId>/capture.json
     scenarioId is read from capture.json; falls back to dir name only when missing.
     """
-    pages_dir = run_dir / side / "pages"
-    if not pages_dir.is_dir():
+    side_dir = run_dir / side
+    if not side_dir.is_dir():
         return {}
     out: dict[str, dict] = {}
-    for page_dir in sorted(pages_dir.iterdir()):
-        if not page_dir.is_dir():
+    for ctx_dir in sorted(side_dir.iterdir()):
+        if not ctx_dir.is_dir():
             continue
-        cap = page_dir / "capture.json"
-        if not cap.is_file():
+        pages_dir = ctx_dir / "pages"
+        if not pages_dir.is_dir():
             continue
-        data = json.loads(cap.read_text(encoding="utf-8"))
-        sid = data.get("scenarioId") or page_dir.name
-        out[sid] = {"capture": data, "page_dir": page_dir}
+        for page_dir in sorted(pages_dir.iterdir()):
+            if not page_dir.is_dir():
+                continue
+            cap = page_dir / "capture.json"
+            if not cap.is_file():
+                continue
+            data = json.loads(cap.read_text(encoding="utf-8"))
+            sid = data.get("scenarioId") or page_dir.name
+            ctx_id = data.get("contextId") or ctx_dir.name
+            out[sid] = {"capture": data, "page_dir": page_dir, "contextId": ctx_id}
     return out
 
 

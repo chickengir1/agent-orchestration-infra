@@ -8,8 +8,8 @@ Inputs:
 
 Outputs:
     <out>/<side>/stamp.json
-    <out>/<side>/pages/<scenarioId>/{capture.json, page.png}
-    <out>/<side>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
+    <out>/<side>/<contextId>/pages/<scenarioId>/{capture.json, page.png}
+    <out>/<side>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 pageId is always scenarioId. Route-based / discover-positional capture is
 not supported.
@@ -241,8 +241,6 @@ def main() -> int:
 
     side_dir = Path(args.out).resolve() / args.side
     side_dir.mkdir(parents=True, exist_ok=True)
-    pages_root = side_dir / "pages"
-    pages_root.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict[str, Any]] = []
 
@@ -310,7 +308,7 @@ def main() -> int:
                 err_buf.append(f"capture: {e}")
                 final_url = page.url
 
-            page_dir = pages_root / scenario_id
+            page_dir = side_dir / ctx_id / "pages" / scenario_id
             page_dir.mkdir(parents=True, exist_ok=True)
             cap = {
                 "scenarioId": scenario_id,
