@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reply Review"
+  short_description: "Draft GitHub PR review-thread replies."
+  default_prompt: "Reply to this PR review comment."

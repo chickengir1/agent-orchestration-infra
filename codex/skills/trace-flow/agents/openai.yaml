@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace Flow"
+  short_description: "Trace frontend data flow and risks."
+  default_prompt: "Trace this frontend flow end to end."

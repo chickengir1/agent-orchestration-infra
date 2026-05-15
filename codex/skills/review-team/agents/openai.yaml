@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Team"
+  short_description: "Run multi-perspective code reviews."
+  default_prompt: "Review this code from multiple perspectives."

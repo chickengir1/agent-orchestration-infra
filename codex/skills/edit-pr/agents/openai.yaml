@@ -1,0 +1,4 @@
+interface:
+  display_name: "Edit PR"
+  short_description: "Draft GitHub PR titles and bodies."
+  default_prompt: "Update the PR title and body."

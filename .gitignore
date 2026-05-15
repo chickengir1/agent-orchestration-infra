@@ -1,0 +1,21 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# Runtime/session artifacts
+sessions/
+projects/
+tasks/
+telemetry/
+cache/
+backups/
+statsig/
+file-history/
+shell-snapshots/
+
+# Auth or local-only state
+.auth/
+*.local.json

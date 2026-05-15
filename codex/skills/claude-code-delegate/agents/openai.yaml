@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Code Delegate"
+  short_description: "Delegate bounded code edits to Claude Code CLI."
+  default_prompt: "Send a bounded code edit task to Claude Code and review the result."

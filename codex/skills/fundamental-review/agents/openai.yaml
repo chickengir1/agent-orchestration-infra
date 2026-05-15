@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fundamental Review"
+  short_description: "Review twelve code fundamentals."
+  default_prompt: "Review this code against the twelve fundamentals."

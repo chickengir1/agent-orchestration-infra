@@ -1,0 +1,4 @@
+interface:
+  display_name: "Trace API"
+  short_description: "Trace backend endpoint behavior."
+  default_prompt: "Trace this API endpoint end to end."

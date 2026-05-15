@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Matrix"
+  short_description: "Generate pytest scenario matrices."
+  default_prompt: "Generate a scenario test matrix."
