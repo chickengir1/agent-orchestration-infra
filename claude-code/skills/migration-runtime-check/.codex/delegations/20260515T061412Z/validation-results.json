@@ -1,9 +1,0 @@
-[
-  {
-    "command": "/Users/leegangho/.claude/skills/migration-runtime-check/.venv/bin/python3 tests/test_compare_synthetic.py",
-    "returncode": 0,
-    "stdout": "PASS case_baseline_no_signal\nPASS case_heading_text_changed\nPASS case_visible_text_added\nPASS case_visible_text_removed\nPASS case_component_count_changed\nPASS case_action_name_changed\nPASS case_action_disabled_changed\nPASS case_action_target_changed\nPASS case_finalurl_path_changed\nPASS case_finalurl_query_only_changed_is_noise\nPASS case_console_first_line_added\nPASS case_pageerror_added\nPASS case_requestfailed_added\nPASS case_classes_added\nPASS case_classes_removed\nPASS case_classes_count_changed\nPASS case_framework_class_drop\nPASS case_scenarioid_ab_matching\nPASS case_context_scoped_capture_layout\nPASS case_expectedfinalpath_mismatch_skips_deep_diff\nPASS case_invalid_capture_section_in_report\nPASS case_no_signal_scenario_omitted_from_differences\nPASS case_noise_candidate_separated\nPASS case_schema_allows_label_array_and_metadata_object\nPASS case_plan_helper_labels_and_metadata\nPASS case_capture_preserves_labels_and_metadata\nPASS case_report_shows_labels_and_metadata\nPASS case_compare_autoloads_plan_from_stamp\nPASS case_noise_only_scenario_listed_in_dedicated_section\nPASS case_schema_allows_scenario_flows\nPASS case_step_result_builder_shapes\nPASS case_compare_reports_flow_status_mismatch\nPASS case_compare_reports_flow_step_snapshot_diff\nPASS case_flow_only_diff_keeps_scenario_in_report\nPASS case_unsafe_selector_guard\nPASS case_navigation_detected_guard\nPASS case_flow_step_runtime_delta_captured\nPASS case_flow_step_noise_only_listed\nPASS case_route_stability_settles_on_stable_url\nPASS case_route_stability_about_blank_not_treated_as_ready\n\n40 cases passed.\n",
-    "stderr": "",
-    "timed_out": false
-  }
-]

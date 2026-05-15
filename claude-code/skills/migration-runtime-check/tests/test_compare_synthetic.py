@@ -185,6 +185,18 @@ def _write_capture(run: Path, side: str, cap: dict) -> Path:
     return d
 
 
+def _write_branch_capture(run: Path, branch_dir: str, side: str, branch: str, cap: dict) -> Path:
+    context_id = cap.get("contextId") or "default"
+    d = run / branch_dir / context_id / "pages" / cap["scenarioId"]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
+    (run / branch_dir / "stamp.json").write_text(
+        json.dumps({"side": side, "branch": branch, "dirName": branch_dir}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return d
+
+
 def _scenario_cap(scenario_id: str, base: dict, expected_final_path: str | None = None, final_path: str | None = None) -> dict:
     cap = copy.deepcopy(base)
     cap["scenarioId"] = scenario_id
@@ -237,6 +249,55 @@ def case_context_scoped_capture_layout() -> None:
             fail("context_scoped_capture_layout", "contextId not preserved", diff["pages"]["scenario-scoped"]["context"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_branch_named_capture_layout() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-branch", BASELINE)
+        b = _scenario_cap("scenario-branch", BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = tmp / "run-x"
+        a_dir = _write_branch_capture(run, "dev", "A", "dev", a)
+        b_dir = _write_branch_capture(run, "sbe-web-v4-angular-migration", "B",
+                                      "sbe-web-v4-angular-migration", b)
+        diff = build_diff(run)
+        if "scenario-branch" not in diff["pages"]:
+            fail("branch_named_capture_layout",
+                 "branch-named captures were not joined",
+                 {"pages": list(diff["pages"])})
+        report = render_report(diff)
+        if "dev/default/pages/scenario-branch/page.png" not in report:
+            fail("branch_named_capture_layout",
+                 "baseline screenshot path must use branch dir",
+                 {"report": report, "a_dir": str(a_dir), "b_dir": str(b_dir)})
+        if "sbe-web-v4-angular-migration/default/pages/scenario-branch/page.png" not in report:
+            fail("branch_named_capture_layout",
+                 "candidate screenshot path must use branch dir",
+                 {"report": report, "a_dir": str(a_dir), "b_dir": str(b_dir)})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_capture_output_dir_name_uses_branch_slug() -> None:
+    cap = _load_capture_mod()
+    plan = {
+        "baseline": {"branch": "dev"},
+        "candidate": {"branch": "feature/angular migration"},
+    }
+    if cap.output_dir_name_for_side(plan, "A") != "dev":
+        fail("capture_output_dir_name_uses_branch_slug",
+             "baseline dir should be branch slug",
+             {"actual": cap.output_dir_name_for_side(plan, "A")})
+    if cap.output_dir_name_for_side(plan, "B") != "feature-angular-migration":
+        fail("capture_output_dir_name_uses_branch_slug",
+             "candidate dir should be branch slug",
+             {"actual": cap.output_dir_name_for_side(plan, "B")})
+    same = {"baseline": {"branch": "dev"}, "candidate": {"branch": "dev"}}
+    if cap.output_dir_name_for_side(same, "B") != "dev-candidate":
+        fail("capture_output_dir_name_uses_branch_slug",
+             "candidate dir should avoid same-branch collision",
+             {"actual": cap.output_dir_name_for_side(same, "B")})
 
 
 def case_expectedfinalpath_mismatch_skips_deep_diff() -> None:
@@ -1016,6 +1077,8 @@ CASES = [
     case_framework_class_drop,
     case_scenarioid_ab_matching,
     case_context_scoped_capture_layout,
+    case_branch_named_capture_layout,
+    case_capture_output_dir_name_uses_branch_slug,
     case_expectedfinalpath_mismatch_skips_deep_diff,
     case_invalid_capture_section_in_report,
     case_no_signal_scenario_omitted_from_differences,

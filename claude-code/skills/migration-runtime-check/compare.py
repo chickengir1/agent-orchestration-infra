@@ -5,9 +5,9 @@ Usage:
     python3 -u compare.py <run-dir>
 
 Inputs:
-    <run-dir>/A/<contextId>/pages/<scenarioId>/capture.json
-    <run-dir>/B/<contextId>/pages/<scenarioId>/capture.json
-    <run-dir>/<side>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
+    <run-dir>/<baselineBranch>/<contextId>/pages/<scenarioId>/capture.json
+    <run-dir>/<candidateBranch>/<contextId>/pages/<scenarioId>/capture.json
+    <run-dir>/<branchName>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 Outputs:
     <run-dir>/diff.json   (machine)
@@ -97,32 +97,56 @@ def flow_step_has_signal(step_diff: dict | None) -> bool:
     return page_has_signal(step_diff)
 
 
+def side_dirs_for_role(run_dir: Path, side: str) -> list[Path]:
+    """Find branch-named side directories whose stamp.json declares side A/B."""
+    out: list[Path] = []
+    if not run_dir.is_dir():
+        return out
+    for child in sorted(run_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        stamp_path = child / "stamp.json"
+        if not stamp_path.is_file():
+            continue
+        try:
+            stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if stamp.get("side") == side:
+            out.append(child)
+    fallback = run_dir / side
+    if not out and fallback.is_dir():
+        out.append(fallback)
+    return out
+
+
 def load_side(run_dir: Path, side: str) -> dict[str, dict]:
     """Return {scenarioId: {"capture": <dict>, "page_dir": Path}}.
 
-    Layout: <run>/<side>/<contextId>/pages/<scenarioId>/capture.json
+    Layout: <run>/<branchName>/<contextId>/pages/<scenarioId>/capture.json
     scenarioId is read from capture.json; falls back to dir name only when missing.
     """
-    side_dir = run_dir / side
-    if not side_dir.is_dir():
+    side_dirs = side_dirs_for_role(run_dir, side)
+    if not side_dirs:
         return {}
     out: dict[str, dict] = {}
-    for ctx_dir in sorted(side_dir.iterdir()):
-        if not ctx_dir.is_dir():
-            continue
-        pages_dir = ctx_dir / "pages"
-        if not pages_dir.is_dir():
-            continue
-        for page_dir in sorted(pages_dir.iterdir()):
-            if not page_dir.is_dir():
+    for side_dir in side_dirs:
+        for ctx_dir in sorted(side_dir.iterdir()):
+            if not ctx_dir.is_dir():
                 continue
-            cap = page_dir / "capture.json"
-            if not cap.is_file():
+            pages_dir = ctx_dir / "pages"
+            if not pages_dir.is_dir():
                 continue
-            data = json.loads(cap.read_text(encoding="utf-8"))
-            sid = data.get("scenarioId") or page_dir.name
-            ctx_id = data.get("contextId") or ctx_dir.name
-            out[sid] = {"capture": data, "page_dir": page_dir, "contextId": ctx_id}
+            for page_dir in sorted(pages_dir.iterdir()):
+                if not page_dir.is_dir():
+                    continue
+                cap = page_dir / "capture.json"
+                if not cap.is_file():
+                    continue
+                data = json.loads(cap.read_text(encoding="utf-8"))
+                sid = data.get("scenarioId") or page_dir.name
+                ctx_id = data.get("contextId") or ctx_dir.name
+                out[sid] = {"capture": data, "page_dir": page_dir, "contextId": ctx_id}
     return out
 
 
@@ -361,12 +385,23 @@ def split_noise(diff_entry: dict, patterns: list[str]) -> dict:
 
 
 def autoload_plan(run_dir: Path) -> dict | None:
-    """Try to load the check-plan referenced by either side's stamp.json.
+    """Try to load the check-plan referenced by any side stamp.json.
 
     Returns None if no plan path is recorded or the file is missing.
     """
-    for side in ("A", "B"):
-        stamp_path = run_dir / side / "stamp.json"
+    stamp_paths: list[Path] = []
+    if run_dir.is_dir():
+        for child in sorted(run_dir.iterdir()):
+            if child.is_dir():
+                stamp_paths.append(child / "stamp.json")
+    # Compatibility fallback for old/incomplete synthetic fixtures.
+    stamp_paths.extend([run_dir / "A" / "stamp.json", run_dir / "B" / "stamp.json"])
+
+    seen: set[Path] = set()
+    for stamp_path in stamp_paths:
+        if stamp_path in seen:
+            continue
+        seen.add(stamp_path)
         if not stamp_path.is_file():
             continue
         try:

@@ -7,9 +7,9 @@ Inputs:
     output run directory
 
 Outputs:
-    <out>/<side>/stamp.json
-    <out>/<side>/<contextId>/pages/<scenarioId>/{capture.json, page.png}
-    <out>/<side>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
+    <out>/<branchName>/stamp.json
+    <out>/<branchName>/<contextId>/pages/<scenarioId>/{capture.json, page.png}
+    <out>/<branchName>/<contextId>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 pageId is always scenarioId. Route-based / discover-positional capture is
 not supported.
@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -41,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", required=True, help="Path to check-plan JSON")
     ap.add_argument("--side", required=True, choices=["A", "B"])
-    ap.add_argument("--out", required=True, help="Run directory; <out>/<side>/... is produced")
+    ap.add_argument("--out", required=True, help="Run directory; <out>/<branchName>/... is produced")
     ap.add_argument("--timeout", type=int, default=10000)
     return ap.parse_args()
 
@@ -49,6 +50,26 @@ def parse_args() -> argparse.Namespace:
 def base_url_for_side(plan: dict, side: str) -> str:
     key = "baseline" if side == "A" else "candidate"
     return plan[key]["baseUrl"].rstrip("/")
+
+
+def role_for_side(side: str) -> str:
+    return "baseline" if side == "A" else "candidate"
+
+
+def slug_dir_name(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-")
+    return slug or "unknown"
+
+
+def output_dir_name_for_side(plan: dict, side: str) -> str:
+    role = role_for_side(side)
+    branch = str(plan.get(role, {}).get("branch") or side)
+    branch_slug = slug_dir_name(branch)
+    other_role = "candidate" if role == "baseline" else "baseline"
+    other_branch = str(plan.get(other_role, {}).get("branch") or "")
+    if role == "candidate" and branch_slug == slug_dir_name(other_branch):
+        return f"{branch_slug}-candidate"
+    return branch_slug
 
 
 def url_path(url: str) -> str:
@@ -275,8 +296,11 @@ def main() -> int:
         return 2
     contexts_map: dict[str, dict] = {ctx["id"]: ctx for ctx in plan.get("contexts", [])}
     base = base_url_for_side(plan, args.side)
+    role = role_for_side(args.side)
+    branch = str(plan.get(role, {}).get("branch") or args.side)
+    side_dir_name = output_dir_name_for_side(plan, args.side)
 
-    side_dir = Path(args.out).resolve() / args.side
+    side_dir = Path(args.out).resolve() / side_dir_name
     side_dir.mkdir(parents=True, exist_ok=True)
 
     summary: list[dict[str, Any]] = []
@@ -395,6 +419,9 @@ def main() -> int:
 
         stamp = {
             "side": args.side,
+            "role": role,
+            "branch": branch,
+            "dirName": side_dir_name,
             "baseUrl": base,
             "planPath": str(Path(args.plan).resolve()),
             "planSha256": hashlib.sha256(Path(args.plan).read_bytes()).hexdigest(),
@@ -414,6 +441,8 @@ def main() -> int:
 
     print(json.dumps({
         "side": args.side,
+        "role": role,
+        "branch": branch,
         "outDir": str(side_dir),
         "scenarios": summary,
     }, ensure_ascii=False))

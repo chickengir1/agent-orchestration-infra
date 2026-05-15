@@ -1,3 +1,0 @@
-SKILL.md
-capture.py
-tests/test_compare_synthetic.py
