@@ -62,6 +62,13 @@ def resolve_storage_state(plan: dict, context_meta: dict) -> str | None:
     return plan.get("auth", {}).get("storageState")
 
 
+UNSAFE_SELECTOR_PATTERNS = (".ng-", ".cdk-", ".mat-mdc-", "._ngcontent", "._nghost")
+
+
+def is_unsafe_selector(selector: str) -> bool:
+    return any(p in (selector or "") for p in UNSAFE_SELECTOR_PATTERNS)
+
+
 def make_action_result(
     *,
     action_id: str,
@@ -75,7 +82,8 @@ def make_action_result(
 ) -> dict:
     """Build the action.json payload written next to each step snapshot.
 
-    status ∈ {ok, selector-not-found, selector-ambiguous, error, skipped}
+    status ∈ {ok, selector-not-found, selector-ambiguous, unsafe-selector,
+              navigation-detected, error, skipped}
     """
     return {
         "actionId": action_id,
@@ -113,6 +121,20 @@ def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> Non
             )
             continue
 
+        # Unsafe selector guard — runs before any locator query.
+        if is_unsafe_selector(sel):
+            result = make_action_result(
+                action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+                status="unsafe-selector",
+                error="generated/framework class selector is not allowed for safe-ui-action",
+                before_path=before_path, after_path=before_path,
+            )
+            (step_dir / "action.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            aborted = True
+            continue
+
         status = "ok"
         error: str | None = None
         try:
@@ -144,6 +166,12 @@ def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> Non
             page.wait_for_timeout(300)
 
         after_path = url_path(page.url)
+
+        # Navigation guard — safe-ui-action must not change finalPath.
+        if status == "ok" and before_path != after_path:
+            status = "navigation-detected"
+            error = f"safe-ui-action changed finalPath from {before_path} to {after_path}"
+
         result = make_action_result(
             action_id=action["id"], step=i, step_type=step["type"], selector=sel,
             status=status, error=error,

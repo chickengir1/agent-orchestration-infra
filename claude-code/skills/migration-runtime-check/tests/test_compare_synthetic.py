@@ -635,6 +635,139 @@ def case_action_only_diff_keeps_scenario_in_report() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _load_capture_mod():
+    sys.path.insert(0, str(SKILL_DIR))
+    import importlib
+    return importlib.import_module("capture")
+
+
+class _StubLocator:
+    def __init__(self, count_val: int = 1, on_click=None):
+        self._count = count_val
+        self._on_click = on_click
+
+    def count(self) -> int:
+        return self._count
+
+    def click(self, timeout: int = 5000) -> None:
+        if self._on_click is not None:
+            self._on_click()
+
+
+class _StubPage:
+    def __init__(self, url: str, locator_factory):
+        self._url = url
+        self._locator_factory = locator_factory
+        self.evaluations: list = []
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    def set_url(self, url: str) -> None:
+        self._url = url
+
+    def locator(self, sel: str):
+        return self._locator_factory(self, sel)
+
+    def wait_for_timeout(self, ms: int) -> None:
+        pass
+
+    def evaluate(self, js: str, args: dict):
+        return {"view": {}, "actions": [], "meta": {}}
+
+    def screenshot(self, **kwargs) -> None:
+        pass
+
+
+def case_unsafe_selector_guard() -> None:
+    cap = _load_capture_mod()
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        action = {
+            "id": "open-dd",
+            "kind": "safe-ui-action",
+            "snapshotAfterEachStep": True,
+            "steps": [
+                {"type": "click", "selector": ".ng-tns-c123"},
+                {"type": "click", "selector": "[data-testid='next']"},
+            ],
+        }
+        called = {"locator": 0}
+
+        def locator_factory(page, sel):
+            called["locator"] += 1
+            return _StubLocator(count_val=1)
+
+        page = _StubPage("http://x/p", locator_factory)
+        base = tmp / "actions" / action["id"]
+        base.mkdir(parents=True)
+        cap.run_action_steps(page, action, base, extract_js="")
+        step1 = json.loads((base / "step-1" / "action.json").read_text(encoding="utf-8"))
+        if step1["status"] != "unsafe-selector":
+            fail("unsafe_selector_guard", "status must be unsafe-selector", step1)
+        if "generated/framework class selector" not in (step1.get("error") or ""):
+            fail("unsafe_selector_guard", "error message missing", step1)
+        # locator must not have been queried — guard fires before count()
+        if called["locator"] != 0:
+            fail("unsafe_selector_guard",
+                 "locator was queried despite unsafe selector",
+                 called)
+        # subsequent step must be skipped
+        step2 = json.loads((base / "step-2" / "action.json").read_text(encoding="utf-8"))
+        if step2["status"] != "skipped":
+            fail("unsafe_selector_guard", "follow-up step must be skipped", step2)
+        # snapshot for unsafe-selector step should NOT be written (page unchanged)
+        if (base / "step-1" / "capture.json").exists():
+            fail("unsafe_selector_guard",
+                 "snapshot must not be written for unsafe-selector",
+                 {})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_navigation_detected_guard() -> None:
+    cap = _load_capture_mod()
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        action = {
+            "id": "open-dd",
+            "kind": "safe-ui-action",
+            "snapshotAfterEachStep": True,
+            "steps": [
+                {"type": "click", "selector": "[data-testid='nav-link']"},
+                {"type": "click", "selector": "[data-testid='other']"},
+            ],
+        }
+
+        def locator_factory(page, sel):
+            def navigate():
+                page.set_url("http://x/q")  # click causes nav
+            return _StubLocator(count_val=1, on_click=navigate)
+
+        page = _StubPage("http://x/p", locator_factory)
+        base = tmp / "actions" / action["id"]
+        base.mkdir(parents=True)
+        cap.run_action_steps(page, action, base, extract_js="")
+        step1 = json.loads((base / "step-1" / "action.json").read_text(encoding="utf-8"))
+        if step1["status"] != "navigation-detected":
+            fail("navigation_detected_guard", "status must be navigation-detected", step1)
+        if "/p" not in (step1.get("error") or "") or "/q" not in (step1.get("error") or ""):
+            fail("navigation_detected_guard", "error must mention before/after paths", step1)
+        if step1["beforeFinalPath"] != "/p" or step1["afterFinalPath"] != "/q":
+            fail("navigation_detected_guard", "before/after path fields wrong", step1)
+        # snapshot for navigation-detected step IS written (it captures new page state)
+        if not (base / "step-1" / "capture.json").exists():
+            fail("navigation_detected_guard",
+                 "snapshot must be written for navigation-detected", {})
+        # subsequent step must be skipped
+        step2 = json.loads((base / "step-2" / "action.json").read_text(encoding="utf-8"))
+        if step2["status"] != "skipped":
+            fail("navigation_detected_guard", "follow-up step must be skipped", step2)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_noise_only_scenario_listed_in_dedicated_section() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
@@ -744,6 +877,8 @@ CASES = [
     case_compare_reports_action_status_mismatch,
     case_compare_reports_action_step_snapshot_diff,
     case_action_only_diff_keeps_scenario_in_report,
+    case_unsafe_selector_guard,
+    case_navigation_detected_guard,
 ]
 
 

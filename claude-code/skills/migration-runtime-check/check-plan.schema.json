@@ -119,7 +119,7 @@
           },
           "actions": {
             "type": "array",
-            "description": "Approved safe UI actions to execute after the initial capture. v1 supports click only.",
+            "description": "Approved safe UI actions to execute after the initial capture. v1 supports click only. Each step writes an action.json with status ∈ {ok, selector-not-found, selector-ambiguous, unsafe-selector, navigation-detected, error, skipped}.",
             "items": {
               "type": "object",
               "required": ["id", "kind", "steps"],
