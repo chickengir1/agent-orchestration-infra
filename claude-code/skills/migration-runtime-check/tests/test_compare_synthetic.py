@@ -21,6 +21,7 @@ from compare import (  # noqa: E402
     autoload_plan,
     build_diff,
     compare_page,
+    codebase_search,
     page_has_signal,
     render_report,
 )
@@ -138,6 +139,47 @@ def case_requestfailed_added() -> None:
     expected = ["https://api.example.com/v1/items", "net::ERR_FAILED"]
     if expected not in d["requestfailed"]["b_new"]:
         fail("requestfailed_added", "expected requestfailed.b_new normalized entry", d)
+
+
+def case_capture_ignores_known_unstable_requestfailed_for_retry() -> None:
+    cap_mod = _load_capture_mod()
+    cap = {
+        "status": "ok",
+        "finalUrl": "http://localhost:4200/home",
+        "finalPath": "/home",
+        "expectedFinalPath": "/home",
+        "actions": [{"role": "button", "name": "Open"}],
+        "pageerror": [],
+        "requestfailed": [
+            {"url": "https://embed.tawk.to/widget/default", "failure": "net::ERR_FAILED"},
+            {"url": "https://www.google-analytics.com/g/collect?v=2", "failure": "net::ERR_FAILED"},
+        ],
+    }
+    retry, reasons = cap_mod.is_retry_candidate(cap, known_unstable=["tawk.to", "google-analytics.com"])
+    if retry or reasons:
+        fail("capture_ignores_known_unstable_requestfailed_for_retry",
+             "known unstable request failures must not force retry",
+             {"retry": retry, "reasons": reasons})
+
+
+def case_capture_retries_unknown_requestfailed() -> None:
+    cap_mod = _load_capture_mod()
+    cap = {
+        "status": "ok",
+        "finalUrl": "http://localhost:4200/home",
+        "finalPath": "/home",
+        "expectedFinalPath": "/home",
+        "actions": [{"role": "button", "name": "Open"}],
+        "pageerror": [],
+        "requestfailed": [
+            {"url": "https://api.example.com/options", "failure": "net::ERR_FAILED"},
+        ],
+    }
+    retry, reasons = cap_mod.is_retry_candidate(cap, known_unstable=["tawk.to"])
+    if not retry or "requestfailed" not in reasons:
+        fail("capture_retries_unknown_requestfailed",
+             "unknown request failures must remain retry candidates",
+             {"retry": retry, "reasons": reasons})
 
 
 def case_classes_added() -> None:
