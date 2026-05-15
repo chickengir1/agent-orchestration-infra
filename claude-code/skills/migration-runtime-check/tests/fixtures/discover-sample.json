@@ -1,0 +1,22 @@
+{
+  "app": "libs-app",
+  "root": "/abs/path/to/repo",
+  "totalParsed": 3,
+  "reachableCount": 3,
+  "excludedCount": 0,
+  "reachable": [
+    {
+      "route": "/home",
+      "seededPath": "/home"
+    },
+    {
+      "route": "/group/:group_id/settings/facultylist",
+      "seededPath": "/group/2/settings/facultylist"
+    },
+    {
+      "route": "/group/:group_id/boards/:board_type",
+      "seededPath": "/group/2/boards/classnews"
+    }
+  ],
+  "excluded": []
+}

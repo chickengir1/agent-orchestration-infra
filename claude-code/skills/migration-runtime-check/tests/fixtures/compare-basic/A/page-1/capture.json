@@ -1,9 +1,14 @@
 {
-  "pageId": "page-1",
-  "route": "/sample",
-  "target": "/sample",
+  "scenarioId": "sample-default",
+  "routeTemplate": "/sample",
+  "contextId": "default",
+  "vars": {},
+  "labels": { "role": "unknown" },
+  "path": "/sample",
+  "expectedFinalPath": "/sample",
   "status": "ok",
   "finalUrl": "http://localhost:4200/sample",
+  "finalPath": "/sample",
   "meta": {
     "url": "http://localhost:4200/sample",
     "pathname": "/sample",

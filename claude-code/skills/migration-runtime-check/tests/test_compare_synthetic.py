@@ -179,7 +179,7 @@ def case_framework_class_drop() -> None:
 def _build_run(tmp: Path, a_cap: dict, b_cap: dict) -> Path:
     run = tmp / "run-x"
     for side, cap in (("A", a_cap), ("B", b_cap)):
-        d = run / side / "pages" / cap["pageId"]
+        d = run / side / "pages" / cap["scenarioId"]
         d.mkdir(parents=True, exist_ok=True)
         (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
     return run
@@ -190,7 +190,7 @@ def case_report_omits_signal_less_pages() -> None:
     try:
         same = copy.deepcopy(BASELINE)
         diff_cap = copy.deepcopy(BASELINE)
-        diff_cap["pageId"] = "page-2"
+        diff_cap["scenarioId"] = "page-2"
         diff_cap["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         a1, b1 = copy.deepcopy(BASELINE), copy.deepcopy(same)
         a2, b2 = copy.deepcopy(BASELINE), copy.deepcopy(diff_cap)
@@ -275,24 +275,6 @@ def case_report_summary_has_category_counts() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def case_compare_reads_legacy_flat_layout() -> None:
-    """build_diff must still load <side>/<pageId>/capture.json (no pages/ dir)."""
-    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
-    try:
-        b = copy.deepcopy(BASELINE)
-        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
-        run = tmp / "run-x"
-        for side, cap in (("A", BASELINE), ("B", b)):
-            d = run / side / cap["pageId"]  # flat layout (no pages/)
-            d.mkdir(parents=True, exist_ok=True)
-            (d / "capture.json").write_text(json.dumps(cap), encoding="utf-8")
-        diff = build_diff(run)
-        if "page-1" not in diff["pages"]:
-            fail("compare_reads_legacy_flat_layout", "flat layout not loaded", {"pages": list(diff['pages'])})
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
 CASES = [
     case_baseline_no_signal,
     case_heading_text_changed,
@@ -315,7 +297,6 @@ CASES = [
     case_report_section_order,
     case_report_ui_after_actions_not_collected,
     case_report_summary_has_category_counts,
-    case_compare_reads_legacy_flat_layout,
 ]
 
 

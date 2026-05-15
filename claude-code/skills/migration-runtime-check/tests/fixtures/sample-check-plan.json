@@ -1,0 +1,56 @@
+{
+  "app": "libs-app",
+  "intent": "Sample plan used by synthetic tests.",
+  "baseline": {
+    "branch": "dev",
+    "baseUrl": "http://localhost:4200"
+  },
+  "candidate": {
+    "branch": "sbe-web-v4-angular-migration",
+    "baseUrl": "http://localhost:4200"
+  },
+  "auth": {
+    "storageState": ".auth/libs-app.json",
+    "actor": "default",
+    "role": "unknown"
+  },
+  "knownUnstable": [
+    "lds-bars",
+    "lds-css",
+    "ngucarousel",
+    "Fetching"
+  ],
+  "contexts": [
+    {
+      "id": "default",
+      "auth": null,
+      "vars": {},
+      "labels": {
+        "role": "unknown"
+      }
+    },
+    {
+      "id": "group-2-default",
+      "auth": null,
+      "vars": {
+        "group_id": "2"
+      },
+      "labels": {
+        "role": "unknown",
+        "group": "group-2",
+        "permissionScope": "unknown"
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "sample-default",
+      "reason": "minimal sample for compare-signal tests",
+      "routeTemplate": "/sample",
+      "context": "default",
+      "path": "/sample",
+      "expectedFinalPath": "/sample",
+      "compare": ["page-capture", "actions", "console-runtime"]
+    }
+  ]
+}
