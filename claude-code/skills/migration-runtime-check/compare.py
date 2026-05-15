@@ -5,8 +5,9 @@ Usage:
     python3 -u compare.py <run-dir>
 
 Inputs:
-    <run-dir>/A/<pageId>/capture.json
-    <run-dir>/B/<pageId>/capture.json
+    <run-dir>/A/pages/<scenarioId>/capture.json
+    <run-dir>/B/pages/<scenarioId>/capture.json
+    <run-dir>/<side>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 Outputs:
     <run-dir>/diff.json   (machine)
@@ -35,24 +36,24 @@ def drop_framework_classes(m: dict) -> dict:
     return {k: v for k, v in m.items() if not FRAMEWORK_CLASS_RE.match(k)}
 
 
-def load_action_snapshots(page_dir: Path) -> dict[tuple, dict]:
-    """Return {(actionId, step): {"action": <dict>, "capture": <dict | None>, "step_dir": Path}}."""
+def load_flow_snapshots(page_dir: Path) -> dict[tuple, dict]:
+    """Return {(flowId, step): {"step": <dict>, "capture": <dict | None>, "step_dir": Path}}."""
     out: dict[tuple, dict] = {}
-    actions_root = page_dir / "actions"
-    if not actions_root.is_dir():
+    flows_root = page_dir / "flows"
+    if not flows_root.is_dir():
         return out
-    for action_dir in sorted(actions_root.iterdir()):
-        if not action_dir.is_dir():
+    for flow_dir in sorted(flows_root.iterdir()):
+        if not flow_dir.is_dir():
             continue
-        action_id = action_dir.name
-        for step_dir in sorted(action_dir.iterdir()):
+        flow_id = flow_dir.name
+        for step_dir in sorted(flow_dir.iterdir()):
             if not step_dir.is_dir():
                 continue
-            action_json = step_dir / "action.json"
-            if not action_json.is_file():
+            step_json = step_dir / "step.json"
+            if not step_json.is_file():
                 continue
             try:
-                action = json.loads(action_json.read_text(encoding="utf-8"))
+                step = json.loads(step_json.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 continue
             cap_path = step_dir / "capture.json"
@@ -62,21 +63,17 @@ def load_action_snapshots(page_dir: Path) -> dict[tuple, dict]:
                     capture = json.loads(cap_path.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
                     capture = None
-            step = action.get("step", 0)
-            out[(action_id, step)] = {
-                "action": action,
+            step_number = step.get("step", 0)
+            out[(flow_id, step_number)] = {
+                "step": step,
                 "capture": capture,
                 "step_dir": step_dir,
             }
     return out
 
 
-def compare_action_step(a_cap: dict | None, b_cap: dict | None) -> dict | None:
-    """Run compare_page over two action step captures.
-
-    Step captures have only view/actions/meta/finalUrl/finalPath — no console/pageerror/requestfailed.
-    Wrap inputs with empty defaults so compare_page can run unmodified.
-    """
+def compare_flow_step(a_cap: dict | None, b_cap: dict | None) -> dict | None:
+    """Run compare_page over two user-flow step captures."""
     if a_cap is None or b_cap is None:
         return None
 
@@ -86,15 +83,15 @@ def compare_action_step(a_cap: dict | None, b_cap: dict | None) -> dict | None:
             "finalUrl": c.get("finalUrl", ""),
             "view": c.get("view", {}),
             "actions": c.get("actions", []),
-            "console": [],
-            "pageerror": [],
-            "requestfailed": [],
+            "console": c.get("console", []),
+            "pageerror": c.get("pageerror", []),
+            "requestfailed": c.get("requestfailed", []),
         }
 
     return compare_page(wrap(a_cap), wrap(b_cap))
 
 
-def action_step_has_signal(step_diff: dict | None) -> bool:
+def flow_step_has_signal(step_diff: dict | None) -> bool:
     if step_diff is None:
         return False
     return page_has_signal(step_diff)
@@ -424,51 +421,54 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
         a_dir = a_side[sid]["page_dir"]
         b_dir = b_side[sid]["page_dir"]
 
-        a_actions = load_action_snapshots(a_dir)
-        b_actions = load_action_snapshots(b_dir)
-        action_results: list[dict] = []
-        for key in sorted(set(a_actions) | set(b_actions)):
-            a_step = a_actions.get(key)
-            b_step = b_actions.get(key)
+        a_flows = load_flow_snapshots(a_dir)
+        b_flows = load_flow_snapshots(b_dir)
+        flow_results: list[dict] = []
+        for key in sorted(set(a_flows) | set(b_flows)):
+            a_step = a_flows.get(key)
+            b_step = b_flows.get(key)
             if a_step is None or b_step is None:
                 # Only one side ran this step. Record as a status mismatch.
-                a_status = a_step["action"]["status"] if a_step else "missing"
-                b_status = b_step["action"]["status"] if b_step else "missing"
-                action_results.append({
-                    "actionId": key[0],
+                a_status = a_step["step"]["status"] if a_step else "missing"
+                b_status = b_step["step"]["status"] if b_step else "missing"
+                flow_results.append({
+                    "flowId": key[0],
                     "step": key[1],
                     "statusA": a_status,
                     "statusB": b_status,
-                    "errorA": (a_step and a_step["action"].get("error")) or None,
-                    "errorB": (b_step and b_step["action"].get("error")) or None,
+                    "errorA": (a_step and a_step["step"].get("error")) or None,
+                    "errorB": (b_step and b_step["step"].get("error")) or None,
                     "screenshotA": _rel(a_step["step_dir"] / "page.png", run_dir) if a_step else None,
                     "screenshotB": _rel(b_step["step_dir"] / "page.png", run_dir) if b_step else None,
                     "stepDiff": None,
+                    "stepNoise": None,
                 })
                 continue
-            a_act = a_step["action"]
-            b_act = b_step["action"]
+            a_flow_step = a_step["step"]
+            b_flow_step = b_step["step"]
             step_diff = None
-            if a_act["status"] == "ok" and b_act["status"] == "ok":
-                step_diff = compare_action_step(a_step["capture"], b_step["capture"])
+            step_noise = None
+            if a_flow_step["status"] == "ok" and b_flow_step["status"] == "ok":
+                step_diff = compare_flow_step(a_step["capture"], b_step["capture"])
                 if step_diff is not None:
-                    split_noise(step_diff, patterns)
-            action_results.append({
-                "actionId": key[0],
+                    step_noise = split_noise(step_diff, patterns)
+            flow_results.append({
+                "flowId": key[0],
                 "step": key[1],
-                "statusA": a_act["status"],
-                "statusB": b_act["status"],
-                "errorA": a_act.get("error"),
-                "errorB": b_act.get("error"),
+                "statusA": a_flow_step["status"],
+                "statusB": b_flow_step["status"],
+                "errorA": a_flow_step.get("error"),
+                "errorB": b_flow_step.get("error"),
                 "screenshotA": _rel(a_step["step_dir"] / "page.png", run_dir),
                 "screenshotB": _rel(b_step["step_dir"] / "page.png", run_dir),
                 "stepDiff": step_diff,
+                "stepNoise": step_noise,
             })
 
         pages[sid] = {
             "diff": diff_entry,
             "noise": noise,
-            "actionResults": action_results,
+            "flowResults": flow_results,
             "screenshotA": _rel(a_dir / "page.png", run_dir),
             "screenshotB": _rel(b_dir / "page.png", run_dir),
             "context": {
@@ -495,13 +495,17 @@ def has_noise(noise: dict) -> bool:
     ))
 
 
-def has_action_signal(action_results: list[dict]) -> bool:
-    for r in action_results:
+def has_flow_signal(flow_results: list[dict]) -> bool:
+    for r in flow_results:
         if r["statusA"] != r["statusB"]:
             return True
-        if action_step_has_signal(r.get("stepDiff")):
+        if flow_step_has_signal(r.get("stepDiff")):
             return True
     return False
+
+
+def has_flow_noise(flow_results: list[dict]) -> bool:
+    return any(has_noise(r.get("stepNoise") or {}) for r in flow_results)
 
 
 def has_page_capture_diff(d: dict) -> bool:

@@ -1,0 +1,1 @@
+python3 tests/test_compare_synthetic.py

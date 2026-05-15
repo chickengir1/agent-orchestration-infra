@@ -1,0 +1,8 @@
+SKILL.md
+check-plan.schema.json
+capture.py
+compare.py
+plan_helper.py
+tests/test_compare_synthetic.py
+tests/fixtures/sample-check-plan.json
+tests/fixtures/compare-basic/A/page-1/capture.json

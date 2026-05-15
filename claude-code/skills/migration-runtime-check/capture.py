@@ -9,6 +9,7 @@ Inputs:
 Outputs:
     <out>/<side>/stamp.json
     <out>/<side>/pages/<scenarioId>/{capture.json, page.png}
+    <out>/<side>/pages/<scenarioId>/flows/<flowId>/step-<N>/{step.json,capture.json,page.png}
 
 pageId is always scenarioId. Route-based / discover-positional capture is
 not supported.
@@ -62,16 +63,16 @@ def resolve_storage_state(plan: dict, context_meta: dict) -> str | None:
     return plan.get("auth", {}).get("storageState")
 
 
-UNSAFE_SELECTOR_PATTERNS = (".ng-", ".cdk-", ".mat-mdc-", "._ngcontent", "._nghost")
+UNSAFE_SELECTOR_PATTERNS = (".ng-", ".cdk-", ".mat-mdc-", "_ngcontent", "_nghost")
 
 
 def is_unsafe_selector(selector: str) -> bool:
     return any(p in (selector or "") for p in UNSAFE_SELECTOR_PATTERNS)
 
 
-def make_action_result(
+def make_step_result(
     *,
-    action_id: str,
+    flow_id: str,
     step: int,
     step_type: str,
     selector: str,
@@ -80,13 +81,13 @@ def make_action_result(
     before_path: str = "",
     after_path: str = "",
 ) -> dict:
-    """Build the action.json payload written next to each step snapshot.
+    """Build the step.json payload written next to each flow step snapshot.
 
     status ∈ {ok, selector-not-found, selector-ambiguous, unsafe-selector,
               navigation-detected, error, skipped}
     """
     return {
-        "actionId": action_id,
+        "flowId": flow_id,
         "step": step,
         "type": step_type,
         "selector": selector,
@@ -97,39 +98,57 @@ def make_action_result(
     }
 
 
-def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> None:
-    """Execute an action's steps in order, write step snapshots under base_dir.
+def _runtime_delta(console_buf: list[dict], err_buf: list[str], req_fail: list[dict], marks: tuple[int, int, int]) -> dict:
+    console_mark, err_mark, req_mark = marks
+    return {
+        "console": console_buf[console_mark:],
+        "pageerror": err_buf[err_mark:],
+        "requestfailed": req_fail[req_mark:],
+    }
 
-    base_dir = <pageDir>/actions/<actionId>. step-1, step-2, ... subdirs created.
+
+def run_flow_steps(
+    page,
+    flow: dict,
+    base_dir: Path,
+    extract_js: str,
+    console_buf: list[dict],
+    err_buf: list[str],
+    req_fail: list[dict],
+) -> None:
+    """Execute a user flow's steps in order, write step evidence under base_dir.
+
+    base_dir = <pageDir>/flows/<flowId>. step-1, step-2, ... subdirs created.
     Stops on first non-ok status. Locator policy: count() must be exactly 1.
     """
-    snapshot_each = action.get("snapshotAfterEachStep", True)
+    snapshot_each = flow.get("snapshotAfterEachStep", True)
     aborted = False
-    for i, step in enumerate(action["steps"], start=1):
+    for i, step in enumerate(flow["steps"], start=1):
         step_dir = base_dir / f"step-{i}"
         step_dir.mkdir(parents=True, exist_ok=True)
         sel = step["selector"]
         before_path = url_path(page.url)
+        marks = (len(console_buf), len(err_buf), len(req_fail))
         if aborted:
-            result = make_action_result(
-                action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+            result = make_step_result(
+                flow_id=flow["id"], step=i, step_type=step["type"], selector=sel,
                 status="skipped", error="previous step did not complete",
                 before_path=before_path, after_path=before_path,
             )
-            (step_dir / "action.json").write_text(
+            (step_dir / "step.json").write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             continue
 
         # Unsafe selector guard — runs before any locator query.
         if is_unsafe_selector(sel):
-            result = make_action_result(
-                action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+            result = make_step_result(
+                flow_id=flow["id"], step=i, step_type=step["type"], selector=sel,
                 status="unsafe-selector",
-                error="generated/framework class selector is not allowed for safe-ui-action",
+                error="generated/framework selector is not allowed for safe-ui-flow",
                 before_path=before_path, after_path=before_path,
             )
-            (step_dir / "action.json").write_text(
+            (step_dir / "step.json").write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             aborted = True
@@ -170,14 +189,14 @@ def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> Non
         # Navigation guard — safe-ui-action must not change finalPath.
         if status == "ok" and before_path != after_path:
             status = "navigation-detected"
-            error = f"safe-ui-action changed finalPath from {before_path} to {after_path}"
+            error = f"safe-ui-flow changed finalPath from {before_path} to {after_path}"
 
-        result = make_action_result(
-            action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+        result = make_step_result(
+            flow_id=flow["id"], step=i, step_type=step["type"], selector=sel,
             status=status, error=error,
             before_path=before_path, after_path=after_path,
         )
-        (step_dir / "action.json").write_text(
+        (step_dir / "step.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
@@ -190,14 +209,15 @@ def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> Non
                     "meta": surface.get("meta", {}),
                     "finalUrl": page.url,
                     "finalPath": after_path,
+                    **_runtime_delta(console_buf, err_buf, req_fail, marks),
                 }
                 (step_dir / "capture.json").write_text(
                     json.dumps(step_cap, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             except Exception as e:
-                # Snapshot failure does not abort the action sequence; recorded as note in action.json
+                # Snapshot failure does not abort the flow; recorded as note in step.json.
                 result["error"] = (result.get("error") or "") + f" | snapshot failed: {e}"
-                (step_dir / "action.json").write_text(
+                (step_dir / "step.json").write_text(
                     json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
             try:
@@ -320,14 +340,14 @@ def main() -> int:
             except Exception:
                 pass
 
-            scenario_actions: list[dict] = sc.get("actions") or []
-            for action in scenario_actions:
-                action_dir = page_dir / "actions" / action["id"]
-                action_dir.mkdir(parents=True, exist_ok=True)
+            scenario_flows: list[dict] = sc.get("flows") or []
+            for flow in scenario_flows:
+                flow_dir = page_dir / "flows" / flow["id"]
+                flow_dir.mkdir(parents=True, exist_ok=True)
                 try:
-                    run_action_steps(page, action, action_dir, EXTRACT_JS)
+                    run_flow_steps(page, flow, flow_dir, EXTRACT_JS, console_buf, err_buf, req_fail)
                 except Exception as e:
-                    err_buf.append(f"action {action.get('id')} crashed: {e}")
+                    err_buf.append(f"flow {flow.get('id')} crashed: {e}")
             page.close()
             summary.append({
                 "scenarioId": scenario_id,

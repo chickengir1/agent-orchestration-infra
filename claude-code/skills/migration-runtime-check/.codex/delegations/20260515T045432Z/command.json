@@ -1,0 +1,16 @@
+[
+  "/Users/leegangho/.local/bin/claude",
+  "-p",
+  "--no-session-persistence",
+  "--output-format",
+  "json",
+  "--max-turns",
+  "8",
+  "--permission-mode",
+  "acceptEdits",
+  "--tools",
+  "Read,Edit,Write,Bash",
+  "--append-system-prompt-file",
+  "/Users/leegangho/.claude/skills/migration-runtime-check/.codex/delegations/20260515T045432Z/worker-system-prompt.md",
+  "Read .codex/delegations/20260515T045432Z/task.md and complete exactly that task."
+]
