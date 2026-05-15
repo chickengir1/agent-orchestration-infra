@@ -1,31 +1,31 @@
 # Agent Orchestration Infra
 
-Reusable local agent infrastructure for Claude Code and Codex.
+Claude Code와 Codex에서 재사용할 에이전트/스킬 인프라 저장소입니다.
 
-This repository stores only portable agent and skill definitions. It intentionally excludes session logs, memory, cache, telemetry, backups, auth files, local settings, and project-specific runtime state.
+이 레포에는 이식 가능한 에이전트 정의와 스킬 정의만 올립니다. 세션 로그, 프로젝트 메모리, 캐시, 텔레메트리, 백업, 인증 파일, 로컬 설정, 프로젝트별 런타임 상태는 포함하지 않습니다.
 
-## Layout
+## 구조
 
 ```text
 .
 ├── claude-code/
-│   ├── agents/   # Claude Code subagent definitions
-│   └── skills/   # Claude Code skills and bundled scripts
+│   ├── agents/   # Claude Code 서브에이전트 정의
+│   └── skills/   # Claude Code 스킬과 스킬 내부 스크립트
 └── codex/
-    ├── agents/   # Codex custom agent definitions
-    └── skills/   # Codex skills and bundled resources
+    ├── agents/   # Codex 커스텀 에이전트 정의
+    └── skills/   # Codex 스킬과 번들 리소스
 ```
 
 ## Claude Code
 
-Copy Claude Code agents and skills into the local Claude config directory:
+Claude Code 에이전트와 스킬은 로컬 Claude 설정 디렉터리로 복사해서 사용합니다.
 
 ```bash
 cp -R claude-code/agents/* ~/.claude/agents/
 cp -R claude-code/skills/* ~/.claude/skills/
 ```
 
-`claude-code/skills/test-matrix` keeps its generator inside the skill:
+`claude-code/skills/test-matrix`는 generator를 스킬 내부에 포함합니다.
 
 ```text
 claude-code/skills/test-matrix/
@@ -34,11 +34,11 @@ claude-code/skills/test-matrix/
     └── generate.py
 ```
 
-This avoids depending on a separate `~/.claude/tools/test-matrix` directory.
+따라서 별도의 `~/.claude/tools/test-matrix` 디렉터리에 의존하지 않습니다.
 
 ## Codex
 
-Copy Codex custom agents and skills into the local Codex/Agents config directories:
+Codex 커스텀 에이전트와 스킬은 로컬 Codex/Agents 설정 디렉터리로 복사해서 사용합니다.
 
 ```bash
 cp codex/agents/*.toml ~/.codex/agents/
@@ -52,13 +52,13 @@ cp -R codex/skills/trace-api ~/.agents/skills/
 cp -R codex/skills/trace-flow ~/.agents/skills/
 ```
 
-The `claude-code-delegate` skill belongs under `~/.codex/skills` if it should be discovered as a Codex skill:
+`claude-code-delegate`는 일반 `.agents/skills` 스킬이 아니라 Codex 전역 스킬로 사용하는 것을 전제로 합니다.
 
 ```bash
 cp -R codex/skills/claude-code-delegate ~/.codex/skills/
 ```
 
-## Included Infrastructure
+## 포함된 인프라
 
 Claude Code:
 
