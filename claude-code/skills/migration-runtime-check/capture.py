@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--side", required=True, choices=["A", "B"])
     ap.add_argument("--out", required=True, help="Run directory; <out>/<branchName>/... is produced")
     ap.add_argument("--timeout", type=int, default=10000)
-    ap.add_argument("--retries", type=int, default=2, help="Retry a scenario when capture stays on about:blank")
+    ap.add_argument("--retries", type=int, default=1, help="Retry-candidate passes after a full side capture")
     ap.add_argument("--settled-snapshot-ms", type=int, default=1000,
                     help="Write a second settled snapshot after this delay; 0 disables it")
     return ap.parse_args()
@@ -99,54 +100,62 @@ def snapshot_page(page, extract_js: str) -> dict:
     }
 
 
-def capture_scenario_page(page, *, target_url: str, timeout: int, retries: int) -> tuple[str, dict, list[dict]]:
+def capture_scenario_page(page, *, target_url: str, timeout: int) -> tuple[str, dict, list[dict]]:
     attempts: list[dict] = []
     status = "ok"
     surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
-    total_attempts = max(retries, 0) + 1
-    for attempt in range(1, total_attempts + 1):
-        status = "ok"
+    try:
+        page.goto(target_url, wait_until="domcontentloaded", timeout=timeout)
         try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=timeout)
-            try:
-                page.wait_for_load_state("networkidle", timeout=timeout)
-            except PWTimeout:
-                pass
-            page.wait_for_timeout(500)
-            stability_timeout = min(max(timeout // 2, 2000), 5000)
-            final_url = wait_for_route_stability(page, timeout_ms=stability_timeout)
-            surface = snapshot_page(page, EXTRACT_JS)
-            # Keep the stable URL if evaluate changed nothing but page.url was
-            # observed through the route-stability loop.
-            surface["finalUrl"] = surface.get("finalUrl") or final_url
-            surface["finalPath"] = surface.get("finalPath") or url_path(final_url)
+            page.wait_for_load_state("networkidle", timeout=timeout)
         except PWTimeout:
-            status = "timeout"
-            surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
-        except Exception as e:
-            status = "error"
-            surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
-            attempts.append({
-                "attempt": attempt,
-                "status": status,
-                "finalUrl": surface["finalUrl"],
-                "finalPath": surface["finalPath"],
-                "error": str(e),
-            })
-            break
-
+            pass
+        page.wait_for_timeout(500)
+        stability_timeout = min(max(timeout // 2, 2000), 5000)
+        final_url = wait_for_route_stability(page, timeout_ms=stability_timeout)
+        surface = snapshot_page(page, EXTRACT_JS)
+        surface["finalUrl"] = surface.get("finalUrl") or final_url
+        surface["finalPath"] = surface.get("finalPath") or url_path(final_url)
+    except PWTimeout:
+        status = "timeout"
+        surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
+    except Exception as e:
+        status = "error"
+        surface = {"finalUrl": page.url, "finalPath": url_path(page.url), "meta": {}, "view": {}, "actions": []}
         attempts.append({
-            "attempt": attempt,
+            "attempt": 1,
             "status": status,
             "finalUrl": surface["finalUrl"],
             "finalPath": surface["finalPath"],
-            "whiteScreen": len(surface.get("actions") or []) == 0,
+            "error": str(e),
         })
-        if surface["finalUrl"] != "about:blank":
-            break
-        if attempt < total_attempts:
-            page.wait_for_timeout(1000)
+        return status, surface, attempts
+
+    attempts.append({
+        "attempt": 1,
+        "status": status,
+        "finalUrl": surface["finalUrl"],
+        "finalPath": surface["finalPath"],
+        "whiteScreen": len(surface.get("actions") or []) == 0,
+    })
     return status, surface, attempts
+
+
+def is_retry_candidate(cap: dict) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if cap.get("status") != "ok":
+        reasons.append(f"status={cap.get('status')}")
+    if cap.get("finalUrl") == "about:blank" or cap.get("finalPath") == "blank":
+        reasons.append("about:blank")
+    if cap.get("expectedFinalPath") and cap.get("finalPath") != cap.get("expectedFinalPath"):
+        reasons.append("expectedFinalPath-mismatch")
+    if len(cap.get("actions") or []) == 0:
+        reasons.append("zero-actions")
+    if cap.get("pageerror"):
+        reasons.append("pageerror")
+    if cap.get("requestfailed"):
+        reasons.append("requestfailed")
+    return bool(reasons), reasons
 
 
 def wait_for_route_stability(
@@ -401,14 +410,14 @@ def main() -> int:
             pw_ctxs[storage_state] = c
             return c
 
-        for sc in scenarios:
+        def capture_one(sc: dict, *, pass_name: str, retry_of: dict | None = None) -> dict:
             scenario_id = sc["id"]
             ctx_id = sc["context"]
             ctx_meta = contexts_map.get(ctx_id, {"vars": {}, "labels": {}})
             storage_state = resolve_storage_state(plan, ctx_meta)
             target_path = sc["path"]
             expected = sc["expectedFinalPath"]
-            print(f"[{args.side}] {scenario_id}  {target_path}", file=sys.stderr)
+            print(f"[{args.side}] {pass_name} {scenario_id}  {target_path}", file=sys.stderr)
 
             pw_ctx = get_ctx(storage_state)
             page = pw_ctx.new_page()
@@ -425,7 +434,6 @@ def main() -> int:
                 page,
                 target_url=target_url,
                 timeout=args.timeout,
-                retries=args.retries,
             )
             if attempts and attempts[-1].get("error"):
                 err_buf.append(f"capture: {attempts[-1]['error']}")
@@ -444,6 +452,8 @@ def main() -> int:
                     err_buf.append(f"settled snapshot: {e}")
 
             page_dir = side_dir / ctx_id / "pages" / scenario_id
+            if retry_of is not None and page_dir.exists():
+                shutil.rmtree(page_dir)
             page_dir.mkdir(parents=True, exist_ok=True)
             cap = {
                 "scenarioId": scenario_id,
@@ -459,6 +469,8 @@ def main() -> int:
                 "finalUrl": surface.get("finalUrl", ""),
                 "finalPath": surface.get("finalPath", ""),
                 "captureAttempts": attempts,
+                "capturePass": pass_name,
+                "retryOf": retry_of,
                 "settled": settled,
                 "meta": surface.get("meta", {}),
                 "view": surface.get("view", {}),
@@ -484,13 +496,58 @@ def main() -> int:
                 except Exception as e:
                     err_buf.append(f"flow {flow.get('id')} crashed: {e}")
             page.close()
-            summary.append({
+            retry_candidate, retry_reasons = is_retry_candidate(cap)
+            cap["retryCandidate"] = retry_candidate
+            cap["retryReasons"] = retry_reasons
+            (page_dir / "capture.json").write_text(
+                json.dumps(cap, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return {
                 "scenarioId": scenario_id,
                 "status": status,
                 "finalPath": cap["finalPath"],
                 "expected": expected,
                 "reachedExpected": cap["finalPath"] == expected,
-            })
+                "retryCandidate": retry_candidate,
+                "retryReasons": retry_reasons,
+            }
+
+        summary_by_id: dict[str, dict[str, Any]] = {}
+        retry_queue: list[tuple[dict, dict]] = []
+        for sc in scenarios:
+            item = capture_one(sc, pass_name="initial")
+            summary_by_id[item["scenarioId"]] = item
+            if item["retryCandidate"]:
+                retry_queue.append((sc, item))
+
+        retry_history: list[dict[str, Any]] = []
+        (side_dir / "retry-candidates.json").write_text(
+            json.dumps([item for _, item in retry_queue], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        retry_passes = max(args.retries, 0)
+        for retry_index in range(1, retry_passes + 1):
+            if not retry_queue:
+                break
+            current = retry_queue
+            retry_queue = []
+            for sc, previous in current:
+                item = capture_one(sc, pass_name=f"retry-{retry_index}", retry_of=previous)
+                summary_by_id[item["scenarioId"]] = item
+                retry_history.append({
+                    "retryPass": retry_index,
+                    "scenarioId": item["scenarioId"],
+                    "previous": previous,
+                    "result": item,
+                })
+                if item["retryCandidate"]:
+                    retry_queue.append((sc, item))
+        (side_dir / "retry-history.json").write_text(
+            json.dumps(retry_history, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        summary = [summary_by_id[sc["id"]] for sc in scenarios if sc["id"] in summary_by_id]
 
         stamp = {
             "side": args.side,
@@ -506,6 +563,7 @@ def main() -> int:
             "colorScheme": "light",
             "browser": "chromium",
             "browserVersion": browser.version,
+            "retryPasses": max(args.retries, 0),
         }
         (side_dir / "stamp.json").write_text(
             json.dumps(stamp, ensure_ascii=False, indent=2), encoding="utf-8"

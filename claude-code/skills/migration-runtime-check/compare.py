@@ -16,6 +16,7 @@ Outputs:
 
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -382,6 +383,68 @@ def _rel(path: Path, root: Path) -> str:
         return str(path)
 
 
+def repo_root_for_run(run_dir: Path) -> Path | None:
+    # Expected layout: <repo>/.claude/migration-runtime-check/run-<n>
+    try:
+        if run_dir.parent.name == "migration-runtime-check" and run_dir.parent.parent.name == ".claude":
+            return run_dir.parent.parent.parent
+    except IndexError:
+        return None
+    return None
+
+
+def _searchable_signal_patterns(diff_entry: dict) -> list[str]:
+    patterns: list[str] = []
+    for axis in ("components", "classes"):
+        bucket = diff_entry.get(axis) or {}
+        patterns.extend(str(x) for x in bucket.get("added", [])[:8])
+        patterns.extend(str(x) for x in bucket.get("removed", [])[:8])
+        patterns.extend(str(x.get("name")) for x in bucket.get("changed", [])[:8] if x.get("name"))
+    for typ, text in (diff_entry.get("console") or {}).get("b_new", [])[:5]:
+        if typ == "error":
+            patterns.append(text.split(":", 1)[0] if ":" in text else text)
+    for text in (diff_entry.get("pageerror") or {}).get("b_new", [])[:5]:
+        patterns.append(text.split(":", 1)[0] if ":" in text else text)
+    return [p for p in dict.fromkeys(patterns) if len(p) >= 4]
+
+
+def codebase_search(root: Path | None, diff_entry: dict) -> list[dict]:
+    if root is None or not root.is_dir():
+        return []
+    patterns = _searchable_signal_patterns(diff_entry)
+    if not patterns:
+        return []
+    search_roots = [p for p in (root / "apps", root / "libs") if p.is_dir()]
+    if not search_roots:
+        search_roots = [root]
+    out: list[dict] = []
+    for pattern in patterns[:12]:
+        try:
+            proc = subprocess.run(
+                ["rg", "--fixed-strings", "--line-number", "--max-count", "5", pattern, *map(str, search_roots)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        hits = []
+        for line in proc.stdout.splitlines()[:5]:
+            parts = line.split(":", 2)
+            if len(parts) < 3:
+                continue
+            path, lineno, text = parts
+            hits.append({
+                "path": _rel(Path(path), root),
+                "line": lineno,
+                "text": text.strip()[:180],
+            })
+        if hits:
+            out.append({"pattern": pattern, "hits": hits})
+    return out
+
+
 def split_noise(diff_entry: dict, patterns: list[str]) -> dict:
     """Move knownUnstable-matched signal items out of main diff into noise bucket.
 
@@ -472,6 +535,7 @@ def autoload_plan(run_dir: Path) -> dict | None:
 
 def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
     patterns: list[str] = list((plan or {}).get("knownUnstable") or [])
+    repo_root = repo_root_for_run(run_dir)
     a_side = load_side(run_dir, "A")
     b_side = load_side(run_dir, "B")
     scenario_ids = sorted(set(a_side) | set(b_side))
@@ -576,6 +640,7 @@ def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
             "settledDiff": settled_diff,
             "settledNoise": settled_noise,
             "transientPageDiff": transient_page_diff,
+            "codebaseSearch": codebase_search(repo_root, diff_entry),
             "flowResults": flow_results,
             "screenshotA": _rel(a_dir / "page.png", run_dir),
             "screenshotB": _rel(b_dir / "page.png", run_dir),
@@ -744,6 +809,15 @@ def _render_console_runtime(d: dict) -> list[str]:
             out.append(f"  - B-new: {url} ({failure})")
         for url, failure in rf["a_only"]:
             out.append(f"  - A-only: {url} ({failure})")
+    return out
+
+
+def _render_codebase_search(results: list[dict]) -> list[str]:
+    out: list[str] = ["#### Codebase Search"]
+    for item in results:
+        out.append(f"- pattern: `{item['pattern']}`")
+        for hit in item.get("hits", []):
+            out.append(f"  - `{hit['path']}:{hit['line']}` {hit['text']}")
     return out
 
 
@@ -991,6 +1065,9 @@ def render_report(diff: dict) -> str:
                 lines.append("")
             if has_noise(entry["noise"]):
                 lines.extend(_render_noise_candidates(entry["noise"]))
+                lines.append("")
+            if entry.get("codebaseSearch"):
+                lines.extend(_render_codebase_search(entry["codebaseSearch"]))
                 lines.append("")
 
     if noise_only:
