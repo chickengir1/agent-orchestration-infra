@@ -2,7 +2,9 @@
 """Capture view/actions/console for each reachable route in a discover-*.json.
 
 Inputs: discover-<app>.json, side (A or B), base URL, optional auth.
-Outputs: <out>/<side>/<pageId>/{capture.json, page.png, stamp.json}
+Outputs:
+    <out>/<side>/stamp.json
+    <out>/<side>/pages/<pageId>/{capture.json, page.png}
 """
 from __future__ import annotations
 
@@ -111,7 +113,7 @@ def main() -> int:
                 err_buf.append(f"capture: {e}")
                 final_url = page.url
 
-            page_dir = side_dir / pid
+            page_dir = side_dir / "pages" / pid
             page_dir.mkdir(parents=True, exist_ok=True)
             cap = {
                 "pageId": pid,

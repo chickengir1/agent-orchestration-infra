@@ -8,14 +8,21 @@ signal field reflects the injected change.
 
 import copy
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SKILL_DIR = HERE.parent
 sys.path.insert(0, str(SKILL_DIR))
 
-from compare import compare_page, page_has_signal  # noqa: E402
+from compare import (  # noqa: E402
+    build_diff,
+    compare_page,
+    page_has_signal,
+    render_report,
+)
 
 BASELINE_PATH = HERE / "fixtures" / "compare-basic" / "A" / "page-1" / "capture.json"
 BASELINE = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
@@ -169,6 +176,123 @@ def case_framework_class_drop() -> None:
         fail("framework_class_drop", "framework-only noise must not surface as signal", d)
 
 
+def _build_run(tmp: Path, a_cap: dict, b_cap: dict) -> Path:
+    run = tmp / "run-x"
+    for side, cap in (("A", a_cap), ("B", b_cap)):
+        d = run / side / "pages" / cap["pageId"]
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
+    return run
+
+
+def case_report_omits_signal_less_pages() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        same = copy.deepcopy(BASELINE)
+        diff_cap = copy.deepcopy(BASELINE)
+        diff_cap["pageId"] = "page-2"
+        diff_cap["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        a1, b1 = copy.deepcopy(BASELINE), copy.deepcopy(same)
+        a2, b2 = copy.deepcopy(BASELINE), copy.deepcopy(diff_cap)
+        a2["pageId"] = "page-2"
+        # Build a run with: page-1 (no diff), page-2 (heading diff)
+        run = tmp / "run-x"
+        for pid, ca, cb in (("page-1", a1, b1), ("page-2", a2, b2)):
+            for side, cap in (("A", ca), ("B", cb)):
+                pd = run / side / "pages" / pid
+                pd.mkdir(parents=True, exist_ok=True)
+                (pd / "capture.json").write_text(json.dumps(cap), encoding="utf-8")
+        diff = build_diff(run)
+        report = render_report(diff)
+        if "## page-1\n" in report or "\n## page-1\n" in report:
+            fail("report_omits_signal_less_pages", "page-1 (no signal) must not appear", {"report": report})
+        if "## page-2" not in report:
+            fail("report_omits_signal_less_pages", "page-2 (signal) must appear", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_report_section_order() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        b = copy.deepcopy(BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        b["actions"][0]["state"]["disabled"] = True
+        b["pageerror"].append("Oops")
+        run = _build_run(tmp, BASELINE, b)
+        diff = build_diff(run)
+        report = render_report(diff)
+        # Section order must be Page Capture -> Actions -> Console / Runtime -> UI Changes
+        idx_pc = report.find("### Page Capture")
+        idx_ac = report.find("### Actions")
+        idx_cr = report.find("### Console / Runtime")
+        idx_ui = report.find("### UI Changes After Actions")
+        if not (0 <= idx_pc < idx_ac < idx_cr < idx_ui):
+            fail("report_section_order", "section order must be PC<Actions<Console<UI", {
+                "page_capture": idx_pc, "actions": idx_ac, "console": idx_cr, "ui": idx_ui,
+                "report": report,
+            })
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_report_ui_after_actions_not_collected() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        b = copy.deepcopy(BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = _build_run(tmp, BASELINE, b)
+        diff = build_diff(run)
+        report = render_report(diff)
+        if "### UI Changes After Actions" not in report:
+            fail("report_ui_after_actions_not_collected", "section must exist", {"report": report})
+        if "not collected" not in report:
+            fail("report_ui_after_actions_not_collected", "must contain 'not collected'", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_report_summary_has_category_counts() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        b = copy.deepcopy(BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = _build_run(tmp, BASELINE, b)
+        diff = build_diff(run)
+        report = render_report(diff)
+        for needle in (
+            "## Summary",
+            "total pages compared:",
+            "pages with differences:",
+            "### Category counts",
+            "Page Capture:",
+            "Actions:",
+            "Console / Runtime:",
+        ):
+            if needle not in report:
+                fail("report_summary_has_category_counts", f"missing {needle!r}", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_compare_reads_legacy_flat_layout() -> None:
+    """build_diff must still load <side>/<pageId>/capture.json (no pages/ dir)."""
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        b = copy.deepcopy(BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = tmp / "run-x"
+        for side, cap in (("A", BASELINE), ("B", b)):
+            d = run / side / cap["pageId"]  # flat layout (no pages/)
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "capture.json").write_text(json.dumps(cap), encoding="utf-8")
+        diff = build_diff(run)
+        if "page-1" not in diff["pages"]:
+            fail("compare_reads_legacy_flat_layout", "flat layout not loaded", {"pages": list(diff['pages'])})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 CASES = [
     case_baseline_no_signal,
     case_heading_text_changed,
@@ -187,6 +311,11 @@ CASES = [
     case_classes_removed,
     case_classes_count_changed,
     case_framework_class_drop,
+    case_report_omits_signal_less_pages,
+    case_report_section_order,
+    case_report_ui_after_actions_not_collected,
+    case_report_summary_has_category_counts,
+    case_compare_reads_legacy_flat_layout,
 ]
 
 

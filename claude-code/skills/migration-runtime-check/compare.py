@@ -36,14 +36,27 @@ def drop_framework_classes(m: dict) -> dict:
 
 
 def load_side(run_dir: Path, side: str) -> dict[str, dict]:
+    """Return {pageId: {"capture": <dict>, "page_dir": Path}}.
+
+    Supports both layouts:
+      <run>/<side>/<pageId>/capture.json          (legacy flat)
+      <run>/<side>/pages/<pageId>/capture.json    (current)
+    """
     side_dir = run_dir / side
     if not side_dir.is_dir():
         return {}
-    out = {}
-    for page_dir in sorted(side_dir.iterdir()):
+    pages_dir = side_dir / "pages"
+    base = pages_dir if pages_dir.is_dir() else side_dir
+    out: dict[str, dict] = {}
+    for page_dir in sorted(base.iterdir()):
+        if not page_dir.is_dir():
+            continue
         cap = page_dir / "capture.json"
         if cap.is_file():
-            out[page_dir.name] = json.loads(cap.read_text(encoding="utf-8"))
+            out[page_dir.name] = {
+                "capture": json.loads(cap.read_text(encoding="utf-8")),
+                "page_dir": page_dir,
+            }
     return out
 
 
@@ -222,14 +235,21 @@ def page_has_signal(d: dict) -> bool:
     return False
 
 
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
 def build_diff(run_dir: Path) -> dict:
     a_side = load_side(run_dir, "A")
     b_side = load_side(run_dir, "B")
     page_ids = sorted(set(a_side) | set(b_side))
 
-    pages = {}
-    a_only = []
-    b_only = []
+    pages: dict[str, dict] = {}
+    a_only: list[str] = []
+    b_only: list[str] = []
     for pid in page_ids:
         if pid not in a_side:
             b_only.append(pid)
@@ -237,7 +257,13 @@ def build_diff(run_dir: Path) -> dict:
         if pid not in b_side:
             a_only.append(pid)
             continue
-        pages[pid] = compare_page(a_side[pid], b_side[pid])
+        a_dir = a_side[pid]["page_dir"]
+        b_dir = b_side[pid]["page_dir"]
+        pages[pid] = {
+            "diff": compare_page(a_side[pid]["capture"], b_side[pid]["capture"]),
+            "screenshotA": _rel(a_dir / "page.png", run_dir),
+            "screenshotB": _rel(b_dir / "page.png", run_dir),
+        }
 
     return {
         "aOnly": a_only,
@@ -246,157 +272,244 @@ def build_diff(run_dir: Path) -> dict:
     }
 
 
+def has_page_capture_diff(d: dict) -> bool:
+    if d["status"]["a"] != d["status"]["b"]:
+        return True
+    if not d["finalUrl"]["equal"]:
+        return True
+    if not d["title"]["equal"]:
+        return True
+    if d["whiteScreen"]["a"] != d["whiteScreen"]["b"]:
+        return True
+    for axis in ("components", "classes"):
+        x = d[axis]
+        if x["added"] or x["removed"] or x["changed"]:
+            return True
+    for axis in ("headings", "texts"):
+        x = d[axis]
+        if x["added"] or x["removed"]:
+            return True
+    return False
+
+
+def has_actions_diff(d: dict) -> bool:
+    a = d["actions"]
+    return bool(a["added"] or a["removed"] or a["state_changed"] or a["target_changed"])
+
+
+def has_console_diff(d: dict) -> bool:
+    return bool(
+        d["console"]["b_new"]
+        or d["pageerror"]["b_new"]
+        or d["requestfailed"]["b_new"]
+        or d["requestfailed"]["a_only"]
+    )
+
+
+def _render_page_capture(d: dict, page_entry: dict) -> list[str]:
+    out: list[str] = ["### Page Capture"]
+    out.append("- screenshot path:")
+    out.append(f"  - A: {page_entry['screenshotA']}")
+    out.append(f"  - B: {page_entry['screenshotB']}")
+
+    if d["status"]["a"] != d["status"]["b"]:
+        out.append(f"- status: A={d['status']['a']} / B={d['status']['b']}")
+    if not d["finalUrl"]["equal"]:
+        out.append(f"- finalUrl: A={d['finalUrl']['a']!r} B={d['finalUrl']['b']!r}")
+    if not d["title"]["equal"]:
+        out.append(f"- title: A={d['title']['a']!r} B={d['title']['b']!r}")
+    if d["whiteScreen"]["a"] != d["whiteScreen"]["b"]:
+        out.append(f"- whiteScreen: A={d['whiteScreen']['a']} B={d['whiteScreen']['b']}")
+
+    c = d["components"]
+    if c["added"] or c["removed"] or c["changed"]:
+        out.append(f"- components: +{len(c['added'])} -{len(c['removed'])} Δ{len(c['changed'])}")
+        for name in c["added"]:
+            out.append(f"  - added: `{name}`")
+        for name in c["removed"]:
+            out.append(f"  - removed: `{name}`")
+        for ch in c["changed"]:
+            out.append(f"  - count Δ `{ch['name']}`: A={ch['a']} B={ch['b']}")
+
+    cls = d["classes"]
+    if cls["added"] or cls["removed"] or cls["changed"]:
+        out.append(f"- classes: +{len(cls['added'])} -{len(cls['removed'])} Δ{len(cls['changed'])}")
+        for name in cls["added"]:
+            out.append(f"  - added: `.{name}`")
+        for name in cls["removed"]:
+            out.append(f"  - removed: `.{name}`")
+        for ch in cls["changed"]:
+            out.append(f"  - count Δ `.{ch['name']}`: A={ch['a']} B={ch['b']}")
+
+    h = d["headings"]
+    if h["added"] or h["removed"]:
+        out.append(f"- headings: +{len(h['added'])} -{len(h['removed'])}")
+        for level, text in h["added"]:
+            out.append(f"  - added: h{level} {text!r}")
+        for level, text in h["removed"]:
+            out.append(f"  - removed: h{level} {text!r}")
+
+    t = d["texts"]
+    if t["added"] or t["removed"]:
+        out.append(f"- texts: +{len(t['added'])} -{len(t['removed'])}")
+        for s in t["added"][:20]:
+            out.append(f"  - added: {s!r}")
+        for s in t["removed"][:20]:
+            out.append(f"  - removed: {s!r}")
+
+    return out
+
+
+def _render_actions(d: dict) -> list[str]:
+    a = d["actions"]
+    out: list[str] = ["### Actions"]
+    out.append(
+        f"- counts: A={a['a_count']} B={a['b_count']} "
+        f"(+{len(a['added'])} -{len(a['removed'])} "
+        f"stateΔ{len(a['state_changed'])} targetΔ{len(a['target_changed'])})"
+    )
+    for k in a["added"]:
+        out.append(f"  - added: role={k[0]!r} name={k[1]!r} locus={k[2]!r}")
+    for k in a["removed"]:
+        out.append(f"  - removed: role={k[0]!r} name={k[1]!r} locus={k[2]!r}")
+    for ch in a["state_changed"]:
+        k = ch["key"]
+        out.append(f"  - state Δ: role={k[0]!r} name={k[1]!r} locus={k[2]!r} A={ch['a']} B={ch['b']}")
+    for ch in a["target_changed"]:
+        k = ch["key"]
+        out.append(f"  - target Δ: role={k[0]!r} name={k[1]!r} locus={k[2]!r} A={ch['a']!r} B={ch['b']!r}")
+    return out
+
+
+def _render_console_runtime(d: dict) -> list[str]:
+    out: list[str] = ["### Console / Runtime"]
+    if d["console"]["b_new"]:
+        out.append(f"- console (B-new): {len(d['console']['b_new'])}")
+        for typ, text in d["console"]["b_new"]:
+            out.append(f"  - [{typ}] {text}")
+    if d["pageerror"]["b_new"]:
+        out.append(f"- pageerror (B-new): {len(d['pageerror']['b_new'])}")
+        for msg in d["pageerror"]["b_new"]:
+            out.append(f"  - {msg}")
+    rf = d["requestfailed"]
+    if rf["b_new"] or rf["a_only"]:
+        out.append(f"- requestfailed: B-new={len(rf['b_new'])} A-only={len(rf['a_only'])}")
+        for url, failure in rf["b_new"]:
+            out.append(f"  - B-new: {url} ({failure})")
+        for url, failure in rf["a_only"]:
+            out.append(f"  - A-only: {url} ({failure})")
+    return out
+
+
+def _render_ui_after_actions() -> list[str]:
+    return [
+        "### UI Changes After Actions",
+        "- not collected (action simulation is out of scope for v0)",
+    ]
+
+
 def render_report(diff: dict) -> str:
-    lines: list[str] = []
-    lines.append("# migration-runtime-check report")
-    lines.append("")
+    lines: list[str] = ["# migration-runtime-check report", ""]
 
     total = len(diff["pages"])
-    with_signal = [pid for pid, d in diff["pages"].items() if page_has_signal(d)]
-    lines.append(f"- pages compared: {total}")
-    lines.append(f"- pages with signal: {len(with_signal)}")
+    with_diff: list[str] = []
+    cat_capture = 0
+    cat_actions = 0
+    cat_console = 0
+    for pid, entry in diff["pages"].items():
+        d = entry["diff"]
+        if not page_has_signal(d):
+            continue
+        with_diff.append(pid)
+        if has_page_capture_diff(d):
+            cat_capture += 1
+        if has_actions_diff(d):
+            cat_actions += 1
+        if has_console_diff(d):
+            cat_console += 1
+
+    lines.append("## Summary")
+    lines.append(f"- total pages compared: {total}")
+    lines.append(f"- pages with differences: {len(with_diff)}")
     lines.append(f"- A-only pages: {len(diff['aOnly'])}")
     lines.append(f"- B-only pages: {len(diff['bOnly'])}")
     lines.append("")
+    lines.append("### Category counts (pages affected)")
+    lines.append(f"- Page Capture: {cat_capture}")
+    lines.append(f"- Actions: {cat_actions}")
+    lines.append(f"- Console / Runtime: {cat_console}")
+    lines.append("")
 
     if diff["aOnly"]:
-        lines.append("## A-only")
+        lines.append("## A-only pages")
         for pid in diff["aOnly"]:
             lines.append(f"- {pid}")
         lines.append("")
     if diff["bOnly"]:
-        lines.append("## B-only")
+        lines.append("## B-only pages")
         for pid in diff["bOnly"]:
             lines.append(f"- {pid}")
         lines.append("")
 
-    lines.append("## Pages with signal")
-    lines.append("")
-    if not with_signal:
-        lines.append("_No signal detected._")
+    if not with_diff:
+        lines.append("_No differences detected on any compared page._")
         lines.append("")
+        return "\n".join(lines)
 
-    for pid in with_signal:
-        d = diff["pages"][pid]
-        lines.append(f"### {pid}")
-
-        if d["status"]["a"] != d["status"]["b"]:
-            lines.append(f"- status: A={d['status']['a']} / B={d['status']['b']}")
-        if not d["finalUrl"]["equal"]:
-            lines.append(f"- finalUrl A: {d['finalUrl']['a']}")
-            lines.append(f"- finalUrl B: {d['finalUrl']['b']}")
-        if not d["title"]["equal"]:
-            lines.append(f"- title A: {d['title']['a']}")
-            lines.append(f"- title B: {d['title']['b']}")
-
-        ws_a, ws_b = d["whiteScreen"]["a"], d["whiteScreen"]["b"]
-        if ws_a != ws_b:
-            lines.append(f"- whiteScreen: A={ws_a} / B={ws_b}")
-
-        c = d["components"]
-        if c["added"] or c["removed"] or c["changed"]:
-            lines.append(f"- components: +{len(c['added'])} -{len(c['removed'])} Δ{len(c['changed'])}")
-            for name in c["added"]:
-                lines.append(f"  - added: `{name}`")
-            for name in c["removed"]:
-                lines.append(f"  - removed: `{name}`")
-            for ch in c["changed"]:
-                lines.append(f"  - count Δ `{ch['name']}`: A={ch['a']} B={ch['b']}")
-
-        cls = d["classes"]
-        if cls["added"] or cls["removed"] or cls["changed"]:
-            lines.append(f"- classes: +{len(cls['added'])} -{len(cls['removed'])} Δ{len(cls['changed'])}")
-            for name in cls["added"]:
-                lines.append(f"  - added: `.{name}`")
-            for name in cls["removed"]:
-                lines.append(f"  - removed: `.{name}`")
-            for ch in cls["changed"]:
-                lines.append(f"  - count Δ `.{ch['name']}`: A={ch['a']} B={ch['b']}")
-
-        a = d["actions"]
-        if a["added"] or a["removed"] or a["state_changed"] or a["target_changed"]:
-            lines.append(
-                f"- actions: A={a['a_count']} B={a['b_count']} "
-                f"(+{len(a['added'])} -{len(a['removed'])} "
-                f"stateΔ{len(a['state_changed'])} targetΔ{len(a['target_changed'])})"
-            )
-            for k in a["added"]:
-                lines.append(f"  - added: role={k[0]!r} name={k[1]!r} locus={k[2]!r}")
-            for k in a["removed"]:
-                lines.append(f"  - removed: role={k[0]!r} name={k[1]!r} locus={k[2]!r}")
-            for ch in a["state_changed"]:
-                k = ch["key"]
-                lines.append(f"  - state Δ: role={k[0]!r} name={k[1]!r} locus={k[2]!r} A={ch['a']} B={ch['b']}")
-            for ch in a["target_changed"]:
-                k = ch["key"]
-                lines.append(f"  - target Δ: role={k[0]!r} name={k[1]!r} locus={k[2]!r} A={ch['a']!r} B={ch['b']!r}")
-
-        h = d["headings"]
-        if h["added"] or h["removed"]:
-            lines.append(f"- headings: +{len(h['added'])} -{len(h['removed'])}")
-            for level, text in h["added"]:
-                lines.append(f"  - added: h{level} {text!r}")
-            for level, text in h["removed"]:
-                lines.append(f"  - removed: h{level} {text!r}")
-
-        t = d["texts"]
-        if t["added"] or t["removed"]:
-            lines.append(f"- texts: +{len(t['added'])} -{len(t['removed'])}")
-            for s in t["added"][:20]:
-                lines.append(f"  - added: {s!r}")
-            for s in t["removed"][:20]:
-                lines.append(f"  - removed: {s!r}")
-
-        if d["console"]["b_new"]:
-            lines.append(f"- console (B-new): {len(d['console']['b_new'])}")
-            for typ, text in d["console"]["b_new"]:
-                lines.append(f"  - [{typ}] {text}")
-
-        if d["pageerror"]["b_new"]:
-            lines.append(f"- pageerror (B-new): {len(d['pageerror']['b_new'])}")
-            for msg in d["pageerror"]["b_new"]:
-                lines.append(f"  - {msg}")
-
-        rf = d["requestfailed"]
-        if rf["b_new"] or rf["a_only"]:
-            lines.append(f"- requestfailed: B-new={len(rf['b_new'])} A-only={len(rf['a_only'])}")
-            for url, failure in rf["b_new"]:
-                lines.append(f"  - B-new: {url} ({failure})")
-            for url, failure in rf["a_only"]:
-                lines.append(f"  - A-only: {url} ({failure})")
-
+    for pid in with_diff:
+        entry = diff["pages"][pid]
+        d = entry["diff"]
+        lines.append(f"## {pid}")
+        lines.extend(_render_page_capture(d, entry))
         lines.append("")
-
-    lines.append("## Pages without signal")
-    lines.append("")
-    no_signal = [pid for pid in diff["pages"] if pid not in with_signal]
-    for pid in no_signal:
-        lines.append(f"- {pid}")
-    lines.append("")
+        if has_actions_diff(d):
+            lines.extend(_render_actions(d))
+            lines.append("")
+        if has_console_diff(d):
+            lines.extend(_render_console_runtime(d))
+            lines.append("")
+        lines.extend(_render_ui_after_actions())
+        lines.append("")
 
     return "\n".join(lines)
 
 
+def _diff_for_json(diff: dict) -> dict:
+    """build_diff returns Path objects via page_dir? Already stringified. Safe."""
+    return diff
+
+
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: compare.py <run-dir>", file=sys.stderr)
+    args = sys.argv[1:]
+    write_json = False
+    if "--write-json" in args:
+        args.remove("--write-json")
+        write_json = True
+    if len(args) != 1:
+        print("usage: compare.py <run-dir> [--write-json]", file=sys.stderr)
         return 2
-    run_dir = Path(sys.argv[1]).resolve()
+    run_dir = Path(args[0]).resolve()
     if not run_dir.is_dir():
         print(f"run-dir not found: {run_dir}", file=sys.stderr)
         return 2
 
     diff = build_diff(run_dir)
-    (run_dir / "diff.json").write_text(
-        json.dumps(diff, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
     (run_dir / "report.md").write_text(render_report(diff), encoding="utf-8")
+    if write_json:
+        (run_dir / "diff.json").write_text(
+            json.dumps(_diff_for_json(diff), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    with_diff = sum(
+        1 for entry in diff["pages"].values() if page_has_signal(entry["diff"])
+    )
     print(json.dumps({
         "runDir": str(run_dir),
-        "pages": len(diff["pages"]),
-        "withSignal": sum(1 for d in diff["pages"].values() if page_has_signal(d)),
+        "totalPages": len(diff["pages"]),
+        "pagesWithDifferences": with_diff,
         "aOnly": len(diff["aOnly"]),
         "bOnly": len(diff["bOnly"]),
+        "wroteJson": write_json,
     }))
     return 0
 
