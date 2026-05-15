@@ -186,7 +186,7 @@ def run_flow_steps(
 
         after_path = url_path(page.url)
 
-        # Navigation guard — safe-ui-action must not change finalPath.
+        # Navigation guard — safe-ui-flow must not change finalPath.
         if status == "ok" and before_path != after_path:
             status = "navigation-detected"
             error = f"safe-ui-flow changed finalPath from {before_path} to {after_path}"

@@ -113,13 +113,13 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["page-capture", "actions", "console-runtime"]
+              "enum": ["page-capture", "action-surface", "user-flows", "console-runtime"]
             },
             "description": "Which signal groups to evaluate. Empty array implies all three."
           },
-          "actions": {
+          "flows": {
             "type": "array",
-            "description": "Approved safe UI actions to execute after the initial capture. v1 supports click only. Each step writes an action.json with status ∈ {ok, selector-not-found, selector-ambiguous, unsafe-selector, navigation-detected, error, skipped}.",
+            "description": "Approved safe user flows to execute after the initial capture. v1 supports click only. Each step writes a step.json with status ∈ {ok, selector-not-found, selector-ambiguous, unsafe-selector, navigation-detected, error, skipped}.",
             "items": {
               "type": "object",
               "required": ["id", "kind", "steps"],
@@ -128,9 +128,18 @@
                 "id": { "type": "string" },
                 "kind": {
                   "type": "string",
-                  "enum": ["safe-ui-action"]
+                  "enum": ["safe-ui-flow"]
                 },
                 "description": { "type": "string" },
+                "intent": {
+                  "type": "string",
+                  "description": "Human-readable user intent for this flow. The tool stores it as evidence, not as an oracle."
+                },
+                "expectedObservables": {
+                  "type": "array",
+                  "description": "Human-authored observable expectations to keep next to evidence. v1 does not automatically pass/fail these.",
+                  "items": { "type": "string" }
+                },
                 "snapshotAfterEachStep": {
                   "type": "boolean",
                   "description": "Capture step snapshot after each step. Default true."
@@ -147,6 +156,7 @@
                         "type": "string",
                         "enum": ["click"]
                       },
+                      "description": { "type": "string" },
                       "selector": {
                         "type": "string",
                         "description": "Prefer [data-testid=...]; aria-label / role+name acceptable. Generated class selectors are not allowed."

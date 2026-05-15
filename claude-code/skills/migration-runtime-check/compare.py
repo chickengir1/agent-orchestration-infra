@@ -683,11 +683,11 @@ def _render_noise_candidates(noise: dict) -> list[str]:
     return out
 
 
-def _render_action_results(results: list[dict]) -> list[str]:
-    out: list[str] = ["#### UI Changes After Actions"]
+def _render_flow_results(results: list[dict]) -> list[str]:
+    out: list[str] = ["#### User Flows"]
     for r in results:
-        out.append(f"##### {r['actionId']} / step-{r['step']}")
-        out.append("- action:")
+        out.append(f"##### {r['flowId']} / step-{r['step']}")
+        out.append("- step:")
         out.append(f"  - A: {r['statusA']}")
         if r.get("errorA"):
             out.append(f"    - error: {r['errorA']}")
@@ -701,7 +701,7 @@ def _render_action_results(results: list[dict]) -> list[str]:
             if r.get("screenshotB"):
                 out.append(f"  - B: {r['screenshotB']}")
         step_diff = r.get("stepDiff")
-        if step_diff is not None and action_step_has_signal(step_diff):
+        if step_diff is not None and flow_step_has_signal(step_diff):
             out.append("- differences:")
             v = step_diff
             if not v["finalUrl"]["equal"]:
@@ -726,6 +726,30 @@ def _render_action_results(results: list[dict]) -> list[str]:
                     f"  - actions: +{len(act['added'])} -{len(act['removed'])} "
                     f"stateΔ{len(act['state_changed'])} targetΔ{len(act['target_changed'])})"
                 )
+            if has_console_diff(v):
+                if v["console"]["b_new"]:
+                    out.append(f"  - console (B-new): {len(v['console']['b_new'])}")
+                if v["pageerror"]["b_new"]:
+                    out.append(f"  - pageerror (B-new): {len(v['pageerror']['b_new'])}")
+                if v["requestfailed"]["b_new"] or v["requestfailed"]["a_only"]:
+                    out.append(
+                        f"  - requestfailed: B-new={len(v['requestfailed']['b_new'])} "
+                        f"A-only={len(v['requestfailed']['a_only'])}"
+                    )
+        step_noise = r.get("stepNoise") or {}
+        if has_noise(step_noise):
+            out.append("- noise candidates:")
+            tags: list[str] = []
+            if step_noise["classes_added"] or step_noise["classes_removed"] or step_noise["classes_changed"]:
+                tags.append(
+                    f"classes +{len(step_noise['classes_added'])} "
+                    f"-{len(step_noise['classes_removed'])} Δ{len(step_noise['classes_changed'])}"
+                )
+            if step_noise["texts_added"]:
+                tags.append(f"texts +{len(step_noise['texts_added'])}")
+            if step_noise["console_b_new"]:
+                tags.append(f"console (non-error) +{len(step_noise['console_b_new'])}")
+            out.append(f"  - {'; '.join(tags)}")
     return out
 
 
@@ -760,20 +784,23 @@ def render_report(diff: dict) -> str:
     noise_only: list[str] = []
     cat_capture = 0
     cat_actions = 0
+    cat_flows = 0
     cat_console = 0
     for sid, entry in diff["pages"].items():
         d = entry["diff"]
-        action_results = entry.get("actionResults") or []
-        action_signal = has_action_signal(action_results)
-        if page_has_signal(d) or action_signal:
+        flow_results = entry.get("flowResults") or []
+        flow_signal = has_flow_signal(flow_results)
+        if page_has_signal(d) or flow_signal:
             with_diff.append(sid)
             if has_page_capture_diff(d):
                 cat_capture += 1
-            if has_actions_diff(d) or action_signal:
+            if has_actions_diff(d):
                 cat_actions += 1
+            if flow_signal:
+                cat_flows += 1
             if has_console_diff(d):
                 cat_console += 1
-        elif has_noise(entry["noise"]):
+        elif has_noise(entry["noise"]) or has_flow_noise(flow_results):
             noise_only.append(sid)
 
     lines.append("## Summary")
@@ -788,7 +815,8 @@ def render_report(diff: dict) -> str:
     lines.append("")
     lines.append("### Category counts (scenarios affected)")
     lines.append(f"- Page Capture: {cat_capture}")
-    lines.append(f"- Actions: {cat_actions}")
+    lines.append(f"- Action Surface: {cat_actions}")
+    lines.append(f"- User Flows: {cat_flows}")
     lines.append(f"- Console / Runtime: {cat_console}")
     lines.append("")
 
@@ -821,7 +849,7 @@ def render_report(diff: dict) -> str:
         for sid in with_diff:
             entry = diff["pages"][sid]
             d = entry["diff"]
-            action_results = entry.get("actionResults") or []
+            flow_results = entry.get("flowResults") or []
             lines.append(f"### {sid}")
             lines.extend(_render_context_header(entry["context"]))
             lines.append("")
@@ -841,8 +869,8 @@ def render_report(diff: dict) -> str:
             if has_console_diff(d):
                 lines.extend(_render_console_runtime(d))
                 lines.append("")
-            if has_action_signal(action_results):
-                lines.extend(_render_action_results(action_results))
+            if has_flow_signal(flow_results) or has_flow_noise(flow_results):
+                lines.extend(_render_flow_results(flow_results))
                 lines.append("")
             if has_noise(entry["noise"]):
                 lines.extend(_render_noise_candidates(entry["noise"]))
@@ -864,6 +892,9 @@ def render_report(diff: dict) -> str:
                 tags.append(f"texts +{len(noise['texts_added'])}")
             if noise["console_b_new"]:
                 tags.append(f"console (non-error) +{len(noise['console_b_new'])}")
+            flow_noise_count = sum(1 for result in entry.get("flowResults", []) if has_noise(result.get("stepNoise") or {}))
+            if flow_noise_count:
+                tags.append(f"user-flow noise steps +{flow_noise_count}")
             lines.append(f"- {sid}: {'; '.join(tags) or '(empty)'}")
         lines.append("")
 
@@ -901,7 +932,9 @@ def main() -> int:
             encoding="utf-8",
         )
     with_diff = sum(
-        1 for entry in diff["pages"].values() if page_has_signal(entry["diff"])
+        1
+        for entry in diff["pages"].values()
+        if page_has_signal(entry["diff"]) or has_flow_signal(entry.get("flowResults") or [])
     )
     print(json.dumps({
         "runDir": str(run_dir),

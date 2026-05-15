@@ -113,7 +113,7 @@ def build_plan(args: argparse.Namespace) -> dict:
             "context": args.context_id,
             "path": concrete,
             "expectedFinalPath": concrete,
-            "compare": ["page-capture", "actions", "console-runtime"],
+            "compare": ["page-capture", "action-surface", "user-flows", "console-runtime"],
         })
 
     plan = {
