@@ -176,101 +176,164 @@ def case_framework_class_drop() -> None:
         fail("framework_class_drop", "framework-only noise must not surface as signal", d)
 
 
-def _build_run(tmp: Path, a_cap: dict, b_cap: dict) -> Path:
-    run = tmp / "run-x"
-    for side, cap in (("A", a_cap), ("B", b_cap)):
-        d = run / side / "pages" / cap["scenarioId"]
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
-    return run
+def _write_capture(run: Path, side: str, cap: dict) -> Path:
+    d = run / side / "pages" / cap["scenarioId"]
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "capture.json").write_text(json.dumps(cap, ensure_ascii=False), encoding="utf-8")
+    return d
 
 
-def case_report_omits_signal_less_pages() -> None:
+def _scenario_cap(scenario_id: str, base: dict, expected_final_path: str | None = None, final_path: str | None = None) -> dict:
+    cap = copy.deepcopy(base)
+    cap["scenarioId"] = scenario_id
+    cap["path"] = f"/{scenario_id}"
+    if expected_final_path is not None:
+        cap["expectedFinalPath"] = expected_final_path
+    if final_path is not None:
+        cap["finalPath"] = final_path
+        cap["finalUrl"] = f"http://localhost:4200{final_path}"
+    return cap
+
+
+def case_scenarioid_ab_matching() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
-        same = copy.deepcopy(BASELINE)
-        diff_cap = copy.deepcopy(BASELINE)
-        diff_cap["scenarioId"] = "page-2"
-        diff_cap["view"]["headings"][0] = {"level": 1, "text": "Changed"}
-        a1, b1 = copy.deepcopy(BASELINE), copy.deepcopy(same)
-        a2, b2 = copy.deepcopy(BASELINE), copy.deepcopy(diff_cap)
-        a2["pageId"] = "page-2"
-        # Build a run with: page-1 (no diff), page-2 (heading diff)
+        a = _scenario_cap("scenario-1", BASELINE)
+        b = _scenario_cap("scenario-1", BASELINE)
+        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         run = tmp / "run-x"
-        for pid, ca, cb in (("page-1", a1, b1), ("page-2", a2, b2)):
-            for side, cap in (("A", ca), ("B", cb)):
-                pd = run / side / "pages" / pid
-                pd.mkdir(parents=True, exist_ok=True)
-                (pd / "capture.json").write_text(json.dumps(cap), encoding="utf-8")
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
         diff = build_diff(run)
-        report = render_report(diff)
-        if "## page-1\n" in report or "\n## page-1\n" in report:
-            fail("report_omits_signal_less_pages", "page-1 (no signal) must not appear", {"report": report})
-        if "## page-2" not in report:
-            fail("report_omits_signal_less_pages", "page-2 (signal) must appear", {"report": report})
+        if "scenario-1" not in diff["pages"]:
+            fail("scenarioid_ab_matching", "scenario-1 not joined", {"pages": list(diff["pages"])})
+        if diff["aOnly"] or diff["bOnly"]:
+            fail("scenarioid_ab_matching", "should not be A/B-only", diff)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def case_report_section_order() -> None:
+def case_expectedfinalpath_mismatch_skips_deep_diff() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
-        b = copy.deepcopy(BASELINE)
-        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
-        b["actions"][0]["state"]["disabled"] = True
-        b["pageerror"].append("Oops")
-        run = _build_run(tmp, BASELINE, b)
+        a = _scenario_cap("scenario-redirected", BASELINE,
+                          expected_final_path="/group/2/settings/facultylist",
+                          final_path="/error")
+        b = _scenario_cap("scenario-redirected", BASELINE,
+                          expected_final_path="/group/2/settings/facultylist",
+                          final_path="/group/2/settings/facultylist")
+        # Even if there were huge view differences, deep diff must not run
+        b["view"]["headings"].append({"level": 9, "text": "MASSIVE-CHANGE"})
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
         diff = build_diff(run)
-        report = render_report(diff)
-        # Section order must be Page Capture -> Actions -> Console / Runtime -> UI Changes
-        idx_pc = report.find("### Page Capture")
-        idx_ac = report.find("### Actions")
-        idx_cr = report.find("### Console / Runtime")
-        idx_ui = report.find("### UI Changes After Actions")
-        if not (0 <= idx_pc < idx_ac < idx_cr < idx_ui):
-            fail("report_section_order", "section order must be PC<Actions<Console<UI", {
-                "page_capture": idx_pc, "actions": idx_ac, "console": idx_cr, "ui": idx_ui,
-                "report": report,
-            })
+        if "scenario-redirected" in diff["pages"]:
+            fail("expectedfinalpath_mismatch_skips_deep_diff",
+                 "mismatched scenario must not have deep diff", diff)
+        invalid_ids = [inv["scenarioId"] for inv in diff["invalidCaptures"]]
+        if "scenario-redirected" not in invalid_ids:
+            fail("expectedfinalpath_mismatch_skips_deep_diff",
+                 "expected entry in invalidCaptures", diff)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def case_report_ui_after_actions_not_collected() -> None:
+def case_invalid_capture_section_in_report() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
-        b = copy.deepcopy(BASELINE)
-        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
-        run = _build_run(tmp, BASELINE, b)
+        a = _scenario_cap("scenario-redirected", BASELINE,
+                          expected_final_path="/sample", final_path="/error")
+        b = _scenario_cap("scenario-redirected", BASELINE,
+                          expected_final_path="/sample", final_path="/sample")
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
         diff = build_diff(run)
         report = render_report(diff)
-        if "### UI Changes After Actions" not in report:
-            fail("report_ui_after_actions_not_collected", "section must exist", {"report": report})
-        if "not collected" not in report:
-            fail("report_ui_after_actions_not_collected", "must contain 'not collected'", {"report": report})
+        if "## Invalid Captures" not in report:
+            fail("invalid_capture_section_in_report", "missing section", {"report": report})
+        if "scenario-redirected" not in report:
+            fail("invalid_capture_section_in_report", "scenarioId not listed", {"report": report})
+        if "deep diff: skipped" not in report:
+            fail("invalid_capture_section_in_report", "missing skip note", {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def case_report_summary_has_category_counts() -> None:
+def case_no_signal_scenario_omitted_from_differences() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
-        b = copy.deepcopy(BASELINE)
-        b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
-        run = _build_run(tmp, BASELINE, b)
+        # Two scenarios: one identical, one with heading diff
+        same_a = _scenario_cap("scenario-same", BASELINE)
+        same_b = _scenario_cap("scenario-same", BASELINE)
+        diff_a = _scenario_cap("scenario-diff", BASELINE)
+        diff_b = _scenario_cap("scenario-diff", BASELINE)
+        diff_b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
+        run = tmp / "run-x"
+        for cap in (same_a, diff_a):
+            _write_capture(run, "A", cap)
+        for cap in (same_b, diff_b):
+            _write_capture(run, "B", cap)
         diff = build_diff(run)
         report = render_report(diff)
-        for needle in (
-            "## Summary",
-            "total pages compared:",
-            "pages with differences:",
-            "### Category counts",
-            "Page Capture:",
-            "Actions:",
-            "Console / Runtime:",
-        ):
-            if needle not in report:
-                fail("report_summary_has_category_counts", f"missing {needle!r}", {"report": report})
+        diff_idx = report.find("## Differences")
+        if diff_idx < 0:
+            fail("no_signal_scenario_omitted_from_differences",
+                 "Differences section missing", {"report": report})
+        differences_block = report[diff_idx:]
+        if "scenario-same" in differences_block:
+            fail("no_signal_scenario_omitted_from_differences",
+                 "signal-less scenario must not appear in Differences",
+                 {"report": report})
+        if "scenario-diff" not in differences_block:
+            fail("no_signal_scenario_omitted_from_differences",
+                 "signal scenario must appear in Differences",
+                 {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_noise_candidate_separated() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-noise", BASELINE)
+        b = _scenario_cap("scenario-noise", BASELINE)
+        # Inject noise (matches knownUnstable) and one main signal
+        b["view"]["classes"]["lds-bars"] = 3                # noise (classes.added)
+        b["view"]["classes"]["lds-css"] = 1                 # noise (classes.added)
+        b["view"]["texts"].append("Fetching info...")        # noise (texts.added)
+        b["console"].append({"type": "warning", "text": "ngucarousel-xyz mounted"})  # noise (non-error console)
+        b["view"]["classes"]["genuinely-new"] = 1            # main signal
+        # Error console must NOT be filtered as noise even if pattern matches
+        b["console"].append({"type": "error", "text": "Fetching info failed catastrophically"})
+        plan = {"knownUnstable": ["lds-bars", "lds-css", "Fetching", "ngucarousel"]}
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        diff = build_diff(run, plan=plan)
+        entry = diff["pages"].get("scenario-noise")
+        if entry is None:
+            fail("noise_candidate_separated", "scenario not joined", diff)
+        d = entry["diff"]
+        noise = entry["noise"]
+        if "lds-bars" not in noise["classes_added"] or "lds-css" not in noise["classes_added"]:
+            fail("noise_candidate_separated", "noise classes not separated", noise)
+        if "lds-bars" in d["classes"]["added"] or "lds-css" in d["classes"]["added"]:
+            fail("noise_candidate_separated", "noise leaked into main diff", d["classes"])
+        if "genuinely-new" not in d["classes"]["added"]:
+            fail("noise_candidate_separated", "main class signal lost", d["classes"])
+        if not any("Fetching" in s for s in noise["texts_added"]):
+            fail("noise_candidate_separated", "noise text not separated", noise)
+        if not any(typ == "warning" and "ngucarousel" in text for typ, text in noise["console_b_new"]):
+            fail("noise_candidate_separated", "warning console not separated", noise)
+        # Error console with matching substring must remain in main diff
+        if not any(typ == "error" and "Fetching" in text for typ, text in d["console"]["b_new"]):
+            fail("noise_candidate_separated", "error console must not be classified as noise", d["console"])
+        # Render report and confirm noise lives in Noise Candidates subsection only
+        report = render_report(diff)
+        if "#### Noise Candidates" not in report:
+            fail("noise_candidate_separated", "Noise Candidates subsection missing", {"report": report})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -293,10 +356,11 @@ CASES = [
     case_classes_removed,
     case_classes_count_changed,
     case_framework_class_drop,
-    case_report_omits_signal_less_pages,
-    case_report_section_order,
-    case_report_ui_after_actions_not_collected,
-    case_report_summary_has_category_counts,
+    case_scenarioid_ab_matching,
+    case_expectedfinalpath_mismatch_skips_deep_diff,
+    case_invalid_capture_section_in_report,
+    case_no_signal_scenario_omitted_from_differences,
+    case_noise_candidate_separated,
 ]
 
 

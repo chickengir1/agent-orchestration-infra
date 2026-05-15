@@ -36,27 +36,24 @@ def drop_framework_classes(m: dict) -> dict:
 
 
 def load_side(run_dir: Path, side: str) -> dict[str, dict]:
-    """Return {pageId: {"capture": <dict>, "page_dir": Path}}.
+    """Return {scenarioId: {"capture": <dict>, "page_dir": Path}}.
 
-    Supports both layouts:
-      <run>/<side>/<pageId>/capture.json          (legacy flat)
-      <run>/<side>/pages/<pageId>/capture.json    (current)
+    Layout: <run>/<side>/pages/<scenarioId>/capture.json
+    scenarioId is read from capture.json; falls back to dir name only when missing.
     """
-    side_dir = run_dir / side
-    if not side_dir.is_dir():
+    pages_dir = run_dir / side / "pages"
+    if not pages_dir.is_dir():
         return {}
-    pages_dir = side_dir / "pages"
-    base = pages_dir if pages_dir.is_dir() else side_dir
     out: dict[str, dict] = {}
-    for page_dir in sorted(base.iterdir()):
+    for page_dir in sorted(pages_dir.iterdir()):
         if not page_dir.is_dir():
             continue
         cap = page_dir / "capture.json"
-        if cap.is_file():
-            out[page_dir.name] = {
-                "capture": json.loads(cap.read_text(encoding="utf-8")),
-                "page_dir": page_dir,
-            }
+        if not cap.is_file():
+            continue
+        data = json.loads(cap.read_text(encoding="utf-8"))
+        sid = data.get("scenarioId") or page_dir.name
+        out[sid] = {"capture": data, "page_dir": page_dir}
     return out
 
 
@@ -242,34 +239,125 @@ def _rel(path: Path, root: Path) -> str:
         return str(path)
 
 
-def build_diff(run_dir: Path) -> dict:
+def split_noise(diff_entry: dict, patterns: list[str]) -> dict:
+    """Move knownUnstable-matched signal items out of main diff into noise bucket.
+
+    Eligible axes: classes (added/removed/changed), texts (added),
+    console b_new where type != error. All others stay in main diff.
+    """
+    noise: dict = {
+        "classes_added": [],
+        "classes_removed": [],
+        "classes_changed": [],
+        "texts_added": [],
+        "console_b_new": [],
+    }
+    if not patterns:
+        return noise
+
+    def match(s: str) -> bool:
+        return any(p in s for p in patterns)
+
+    cls = diff_entry["classes"]
+    kept_added = []
+    for name in cls["added"]:
+        (noise["classes_added"] if match(name) else kept_added).append(name)
+    cls["added"] = kept_added
+    kept_removed = []
+    for name in cls["removed"]:
+        (noise["classes_removed"] if match(name) else kept_removed).append(name)
+    cls["removed"] = kept_removed
+    kept_changed = []
+    for ch in cls["changed"]:
+        (noise["classes_changed"] if match(ch["name"]) else kept_changed).append(ch)
+    cls["changed"] = kept_changed
+
+    texts = diff_entry["texts"]
+    kept_texts = []
+    for s in texts["added"]:
+        (noise["texts_added"] if match(s) else kept_texts).append(s)
+    texts["added"] = kept_texts
+
+    console = diff_entry["console"]
+    kept_console = []
+    for entry in console["b_new"]:
+        typ, text = entry[0], entry[1]
+        if typ != "error" and match(text):
+            noise["console_b_new"].append(entry)
+        else:
+            kept_console.append(entry)
+    console["b_new"] = kept_console
+
+    return noise
+
+
+def build_diff(run_dir: Path, plan: dict | None = None) -> dict:
+    patterns: list[str] = list((plan or {}).get("knownUnstable") or [])
     a_side = load_side(run_dir, "A")
     b_side = load_side(run_dir, "B")
-    page_ids = sorted(set(a_side) | set(b_side))
+    scenario_ids = sorted(set(a_side) | set(b_side))
 
     pages: dict[str, dict] = {}
+    invalid: list[dict] = []
     a_only: list[str] = []
     b_only: list[str] = []
-    for pid in page_ids:
-        if pid not in a_side:
-            b_only.append(pid)
+    for sid in scenario_ids:
+        if sid not in a_side:
+            b_only.append(sid)
             continue
-        if pid not in b_side:
-            a_only.append(pid)
+        if sid not in b_side:
+            a_only.append(sid)
             continue
-        a_dir = a_side[pid]["page_dir"]
-        b_dir = b_side[pid]["page_dir"]
-        pages[pid] = {
-            "diff": compare_page(a_side[pid]["capture"], b_side[pid]["capture"]),
+        a_cap = a_side[sid]["capture"]
+        b_cap = b_side[sid]["capture"]
+        expected = a_cap.get("expectedFinalPath") or b_cap.get("expectedFinalPath")
+        final_a = a_cap.get("finalPath")
+        final_b = b_cap.get("finalPath")
+        mismatched: list[str] = []
+        if expected is not None:
+            if final_a != expected:
+                mismatched.append("A")
+            if final_b != expected:
+                mismatched.append("B")
+        if mismatched:
+            invalid.append({
+                "scenarioId": sid,
+                "expected": expected,
+                "finalPathA": final_a,
+                "finalPathB": final_b,
+                "mismatched": mismatched,
+            })
+            continue
+
+        diff_entry = compare_page(a_cap, b_cap)
+        noise = split_noise(diff_entry, patterns)
+        a_dir = a_side[sid]["page_dir"]
+        b_dir = b_side[sid]["page_dir"]
+        pages[sid] = {
+            "diff": diff_entry,
+            "noise": noise,
             "screenshotA": _rel(a_dir / "page.png", run_dir),
             "screenshotB": _rel(b_dir / "page.png", run_dir),
+            "context": {
+                "auth": b_cap.get("auth"),
+                "contextId": b_cap.get("contextId"),
+                "vars": b_cap.get("vars", {}),
+                "labels": b_cap.get("labels", {}),
+            },
         }
 
     return {
         "aOnly": a_only,
         "bOnly": b_only,
+        "invalidCaptures": invalid,
         "pages": pages,
     }
+
+
+def has_noise(noise: dict) -> bool:
+    return any(noise.get(k) for k in (
+        "classes_added", "classes_removed", "classes_changed", "texts_added", "console_b_new"
+    ))
 
 
 def has_page_capture_diff(d: dict) -> bool:
@@ -307,7 +395,7 @@ def has_console_diff(d: dict) -> bool:
 
 
 def _render_page_capture(d: dict, page_entry: dict) -> list[str]:
-    out: list[str] = ["### Page Capture"]
+    out: list[str] = ["#### Page Capture"]
     out.append("- screenshot path:")
     out.append(f"  - A: {page_entry['screenshotA']}")
     out.append(f"  - B: {page_entry['screenshotB']}")
@@ -362,7 +450,7 @@ def _render_page_capture(d: dict, page_entry: dict) -> list[str]:
 
 def _render_actions(d: dict) -> list[str]:
     a = d["actions"]
-    out: list[str] = ["### Actions"]
+    out: list[str] = ["#### Actions"]
     out.append(
         f"- counts: A={a['a_count']} B={a['b_count']} "
         f"(+{len(a['added'])} -{len(a['removed'])} "
@@ -382,7 +470,7 @@ def _render_actions(d: dict) -> list[str]:
 
 
 def _render_console_runtime(d: dict) -> list[str]:
-    out: list[str] = ["### Console / Runtime"]
+    out: list[str] = ["#### Console / Runtime"]
     if d["console"]["b_new"]:
         out.append(f"- console (B-new): {len(d['console']['b_new'])}")
         for typ, text in d["console"]["b_new"]:
@@ -401,26 +489,75 @@ def _render_console_runtime(d: dict) -> list[str]:
     return out
 
 
-def _render_ui_after_actions() -> list[str]:
+def _render_context_header(ctx: dict) -> list[str]:
     return [
-        "### UI Changes After Actions",
-        "- not collected (action simulation is out of scope for v0)",
+        "Context:",
+        f"- auth: {ctx.get('auth')}",
+        f"- vars: {ctx.get('vars') or {}}",
+        f"- labels: {ctx.get('labels') or {}}",
     ]
 
 
+def _render_noise_candidates(noise: dict) -> list[str]:
+    out: list[str] = ["#### Noise Candidates"]
+    if noise["classes_added"] or noise["classes_removed"] or noise["classes_changed"]:
+        out.append(
+            f"- classes: +{len(noise['classes_added'])} "
+            f"-{len(noise['classes_removed'])} Δ{len(noise['classes_changed'])}"
+        )
+        for name in noise["classes_added"]:
+            out.append(f"  - added: `.{name}`")
+        for name in noise["classes_removed"]:
+            out.append(f"  - removed: `.{name}`")
+        for ch in noise["classes_changed"]:
+            out.append(f"  - count Δ `.{ch['name']}`: A={ch['a']} B={ch['b']}")
+    if noise["texts_added"]:
+        out.append(f"- texts (added): {len(noise['texts_added'])}")
+        for s in noise["texts_added"][:20]:
+            out.append(f"  - {s!r}")
+    if noise["console_b_new"]:
+        out.append(f"- console (non-error B-new): {len(noise['console_b_new'])}")
+        for typ, text in noise["console_b_new"]:
+            out.append(f"  - [{typ}] {text}")
+    return out
+
+
+_RETROSPECTIVE_TEMPLATE = """## Engineering Retrospective
+
+_사람이 작성. 도구가 자동 생성하지 않음._
+
+### Prediction From Code / Plan
+- 어떤 scenario 가 위험하다고 봤는지
+- 왜 그 scenario 를 골랐는지
+- 어떤 차이를 예상했는지
+
+### Actual Runtime Evidence
+- 실제 캡처에서 나온 차이
+- invalid capture
+- noise
+- 진짜 확인 필요한 항목
+
+### Judgment
+- 도구가 신뢰 가능하게 동작했는지
+- migration 회귀로 단정 가능한 항목이 있는지
+- 다음 보강점
+"""
+
+
 def render_report(diff: dict) -> str:
-    lines: list[str] = ["# migration-runtime-check report", ""]
+    lines: list[str] = ["# Migration Runtime Check Report", ""]
 
     total = len(diff["pages"])
+    invalid = diff.get("invalidCaptures") or []
     with_diff: list[str] = []
     cat_capture = 0
     cat_actions = 0
     cat_console = 0
-    for pid, entry in diff["pages"].items():
+    for sid, entry in diff["pages"].items():
         d = entry["diff"]
         if not page_has_signal(d):
             continue
-        with_diff.append(pid)
+        with_diff.append(sid)
         if has_page_capture_diff(d):
             cat_capture += 1
         if has_actions_diff(d):
@@ -429,75 +566,90 @@ def render_report(diff: dict) -> str:
             cat_console += 1
 
     lines.append("## Summary")
-    lines.append(f"- total pages compared: {total}")
-    lines.append(f"- pages with differences: {len(with_diff)}")
-    lines.append(f"- A-only pages: {len(diff['aOnly'])}")
-    lines.append(f"- B-only pages: {len(diff['bOnly'])}")
+    lines.append(f"- total scenarios: {total + len(invalid)}")
+    lines.append(f"- scenarios with differences: {len(with_diff)}")
+    lines.append(f"- invalid captures: {len(invalid)}")
+    lines.append(f"- A-only scenarios: {len(diff['aOnly'])}")
+    lines.append(f"- B-only scenarios: {len(diff['bOnly'])}")
     lines.append("")
-    lines.append("### Category counts (pages affected)")
+    lines.append("### Category counts (scenarios affected)")
     lines.append(f"- Page Capture: {cat_capture}")
     lines.append(f"- Actions: {cat_actions}")
     lines.append(f"- Console / Runtime: {cat_console}")
     lines.append("")
 
     if diff["aOnly"]:
-        lines.append("## A-only pages")
-        for pid in diff["aOnly"]:
-            lines.append(f"- {pid}")
+        lines.append("## A-only scenarios")
+        for sid in diff["aOnly"]:
+            lines.append(f"- {sid}")
         lines.append("")
     if diff["bOnly"]:
-        lines.append("## B-only pages")
-        for pid in diff["bOnly"]:
-            lines.append(f"- {pid}")
+        lines.append("## B-only scenarios")
+        for sid in diff["bOnly"]:
+            lines.append(f"- {sid}")
         lines.append("")
 
-    if not with_diff:
-        lines.append("_No differences detected on any compared page._")
+    if invalid:
+        lines.append("## Invalid Captures")
         lines.append("")
-        return "\n".join(lines)
-
-    for pid in with_diff:
-        entry = diff["pages"][pid]
-        d = entry["diff"]
-        lines.append(f"## {pid}")
-        lines.extend(_render_page_capture(d, entry))
-        lines.append("")
-        if has_actions_diff(d):
-            lines.extend(_render_actions(d))
+        for inv in invalid:
+            lines.append(f"### {inv['scenarioId']}")
+            lines.append(f"- expected: {inv['expected']}")
+            lines.append(f"- A finalPath: {inv['finalPathA']}")
+            lines.append(f"- B finalPath: {inv['finalPathB']}")
+            lines.append(f"- reason: {', '.join(inv['mismatched'])} did not reach expected path")
+            lines.append("- deep diff: skipped")
             lines.append("")
-        if has_console_diff(d):
-            lines.extend(_render_console_runtime(d))
+
+    if with_diff:
+        lines.append("## Differences")
+        lines.append("")
+        for sid in with_diff:
+            entry = diff["pages"][sid]
+            d = entry["diff"]
+            lines.append(f"### {sid}")
+            lines.extend(_render_context_header(entry["context"]))
             lines.append("")
-        lines.extend(_render_ui_after_actions())
+            lines.extend(_render_page_capture(d, entry))
+            lines.append("")
+            if has_actions_diff(d):
+                lines.extend(_render_actions(d))
+                lines.append("")
+            if has_console_diff(d):
+                lines.extend(_render_console_runtime(d))
+                lines.append("")
+            if has_noise(entry["noise"]):
+                lines.extend(_render_noise_candidates(entry["noise"]))
+                lines.append("")
+    elif not invalid:
+        lines.append("_No differences detected on any compared scenario._")
         lines.append("")
 
+    lines.append(_RETROSPECTIVE_TEMPLATE)
     return "\n".join(lines)
 
 
-def _diff_for_json(diff: dict) -> dict:
-    """build_diff returns Path objects via page_dir? Already stringified. Safe."""
-    return diff
-
-
 def main() -> int:
-    args = sys.argv[1:]
-    write_json = False
-    if "--write-json" in args:
-        args.remove("--write-json")
-        write_json = True
-    if len(args) != 1:
-        print("usage: compare.py <run-dir> [--write-json]", file=sys.stderr)
-        return 2
-    run_dir = Path(args[0]).resolve()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("run_dir")
+    ap.add_argument("--plan", default=None, help="check-plan path; supplies knownUnstable patterns")
+    ap.add_argument("--write-json", action="store_true", dest="write_json")
+    ns = ap.parse_args()
+
+    run_dir = Path(ns.run_dir).resolve()
     if not run_dir.is_dir():
         print(f"run-dir not found: {run_dir}", file=sys.stderr)
         return 2
+    plan = None
+    if ns.plan:
+        plan = json.loads(Path(ns.plan).read_text(encoding="utf-8"))
 
-    diff = build_diff(run_dir)
+    diff = build_diff(run_dir, plan=plan)
     (run_dir / "report.md").write_text(render_report(diff), encoding="utf-8")
-    if write_json:
+    if ns.write_json:
         (run_dir / "diff.json").write_text(
-            json.dumps(_diff_for_json(diff), ensure_ascii=False, indent=2),
+            json.dumps(diff, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     with_diff = sum(
@@ -505,11 +657,12 @@ def main() -> int:
     )
     print(json.dumps({
         "runDir": str(run_dir),
-        "totalPages": len(diff["pages"]),
-        "pagesWithDifferences": with_diff,
+        "totalScenarios": len(diff["pages"]) + len(diff.get("invalidCaptures", [])),
+        "scenariosWithDifferences": with_diff,
+        "invalidCaptures": len(diff.get("invalidCaptures", [])),
         "aOnly": len(diff["aOnly"]),
         "bOnly": len(diff["bOnly"]),
-        "wroteJson": write_json,
+        "wroteJson": ns.write_json,
     }))
     return 0
 
