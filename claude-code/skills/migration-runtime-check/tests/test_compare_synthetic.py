@@ -945,6 +945,57 @@ def case_noise_candidate_separated() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_route_stability_settles_on_stable_url() -> None:
+    cap = _load_capture_mod()
+    page = _StubPage("about:blank", lambda p, s: _StubLocator())
+    clock = {"t": 0.0}
+    def now() -> float:
+        return clock["t"]
+    transitions = [
+        "about:blank", "about:blank",
+        "http://x/loading", "http://x/loading",
+        "http://x/final", "http://x/final", "http://x/final",
+        "http://x/final", "http://x/final", "http://x/final",
+    ]
+    idx = {"i": 0}
+    def sleep(ms: int) -> None:
+        clock["t"] += ms / 1000.0
+        idx["i"] = min(idx["i"] + 1, len(transitions) - 1)
+        page.set_url(transitions[idx["i"]])
+    final_url = cap.wait_for_route_stability(
+        page, stability_ms=100, timeout_ms=2000, poll_ms=50,
+        sleep=sleep, now=now,
+    )
+    if final_url != "http://x/final":
+        fail("route_stability_settles_on_stable_url",
+             "did not settle on /final", {"final": final_url})
+
+
+def case_route_stability_about_blank_not_treated_as_ready() -> None:
+    cap = _load_capture_mod()
+    page = _StubPage("about:blank", lambda p, s: _StubLocator())
+    clock = {"t": 0.0}
+    def now() -> float:
+        return clock["t"]
+    sleeps = {"n": 0}
+    def sleep(ms: int) -> None:
+        clock["t"] += ms / 1000.0
+        sleeps["n"] += 1
+    final_url = cap.wait_for_route_stability(
+        page, stability_ms=50, timeout_ms=300, poll_ms=50,
+        sleep=sleep, now=now,
+    )
+    if final_url != "about:blank":
+        fail("route_stability_about_blank_not_treated_as_ready",
+             "about:blank should be returned only after timeout",
+             {"final": final_url, "sleeps": sleeps["n"]})
+    # Helper must have polled until the deadline rather than returning at the
+    # first stable observation of about:blank.
+    if sleeps["n"] < 6:
+        fail("route_stability_about_blank_not_treated_as_ready",
+             "helper returned before deadline", {"sleeps": sleeps["n"]})
+
+
 CASES = [
     case_baseline_no_signal,
     case_heading_text_changed,
@@ -984,6 +1035,8 @@ CASES = [
     case_navigation_detected_guard,
     case_flow_step_runtime_delta_captured,
     case_flow_step_noise_only_listed,
+    case_route_stability_settles_on_stable_url,
+    case_route_stability_about_blank_not_treated_as_ready,
 ]
 
 

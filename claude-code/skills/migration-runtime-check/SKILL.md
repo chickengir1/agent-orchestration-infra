@@ -120,6 +120,15 @@ python3 plan_helper.py \
 
 discover 의 `reachable[]` 에서 routeTemplate 을 골라 scenario 후보 배열로. scenarioId 는 `{routeSlug}-{contextId}` 형태로 자동 생성.
 
+#### 6-1. user-flow 후보 처리 (capture 전 필수)
+
+draft 가 만들어진 직후, capture 로 진행하기 전에 flow 후보를 한 번 명시적으로 처리한다.
+
+- 사용자가 도메인 지식 입력에서 flow / 인터랙션 / 클릭 / 드롭다운 등 UI 상호작용을 요청했거나, scenario 의 검증 의도상 안전한 UI 인터랙션이 필요한 경우:
+  - 해당 scenario 의 `flows[]` 에 v1 safe-ui-flow (click only, `[data-testid=...]` / `aria-label` / `role`+`name` selector) 항목을 명시적으로 추가한다.
+  - 추가할 flow 후보가 없거나 safe selector 가 확인되지 않으면, scenario 의 `reason` 또는 plan 상단 메모에 **"no flows selected"** 문장을 명시적으로 남긴다.
+- flow 테스트가 요청됐는데 어떤 scenario 의 `flows[]` 도 비어 있고 "no flows selected" 기록도 없는 상태로는 Step 8 capture 를 시작하지 않는다. (silent flows=0 금지)
+
 ### 7. 사용자가 check-plan 승인/수정
 
 - 추가/제거할 scenario

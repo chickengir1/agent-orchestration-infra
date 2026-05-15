@@ -1,0 +1,1 @@
+/Users/leegangho/.claude/skills/migration-runtime-check/.venv/bin/python3 tests/test_compare_synthetic.py

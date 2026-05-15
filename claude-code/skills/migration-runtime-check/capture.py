@@ -20,8 +20,9 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -55,6 +56,42 @@ def url_path(url: str) -> str:
         return urlsplit(url or "").path or "/"
     except ValueError:
         return ""
+
+
+def wait_for_route_stability(
+    page,
+    *,
+    stability_ms: int = 400,
+    timeout_ms: int = 2000,
+    poll_ms: int = 50,
+    sleep: Callable[[int], None] | None = None,
+    now: Callable[[], float] | None = None,
+) -> str:
+    """Wait until page.url stays unchanged for stability_ms or timeout_ms elapses.
+
+    Bounded by timeout_ms. about:blank is never treated as stable; if the URL
+    is still about:blank when the deadline fires, the current URL is returned
+    anyway. Used after goto/networkidle fallback so client-side redirects /
+    route guards have settled before evaluate/screenshot.
+    """
+    do_sleep = sleep if sleep is not None else page.wait_for_timeout
+    clock = now if now is not None else time.monotonic
+    deadline = clock() + timeout_ms / 1000.0
+    last_url = page.url
+    last_change = clock()
+    while True:
+        do_sleep(poll_ms)
+        current = page.url
+        if current != last_url:
+            last_url = current
+            last_change = clock()
+        timed_out = clock() >= deadline
+        if timed_out:
+            return current
+        is_blank = (current or "").startswith("about:blank")
+        stable_for_ms = (clock() - last_change) * 1000.0
+        if not is_blank and stable_for_ms >= stability_ms:
+            return current
 
 
 def resolve_storage_state(plan: dict, context_meta: dict) -> str | None:
@@ -298,7 +335,8 @@ def main() -> int:
                 except PWTimeout:
                     pass
                 page.wait_for_timeout(500)
-                final_url = page.url
+                stability_timeout = min(max(args.timeout // 2, 2000), 5000)
+                final_url = wait_for_route_stability(page, timeout_ms=stability_timeout)
                 surface = page.evaluate(EXTRACT_JS, {"masks": []}) or surface
             except PWTimeout:
                 status = "timeout"

@@ -1,0 +1,19 @@
+{
+  "allowed": [
+    "SKILL.md",
+    "capture.py",
+    "tests/test_compare_synthetic.py"
+  ],
+  "changed_files": [
+    "SKILL.md",
+    "capture.py"
+  ],
+  "forbidden": [
+    "auth",
+    "venv",
+    "git"
+  ],
+  "forbidden_changed": [],
+  "ok": true,
+  "outside_allowed": []
+}
