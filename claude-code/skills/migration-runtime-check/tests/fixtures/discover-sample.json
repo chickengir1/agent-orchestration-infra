@@ -10,12 +10,12 @@
       "seededPath": "/home"
     },
     {
-      "route": "/group/:group_id/settings/facultylist",
-      "seededPath": "/group/2/settings/facultylist"
+      "route": "/resource/:resource_id/details",
+      "seededPath": "/resource/123/details"
     },
     {
-      "route": "/group/:group_id/boards/:board_type",
-      "seededPath": "/group/2/boards/classnews"
+      "route": "/resource/:resource_id/items/:item_type",
+      "seededPath": "/resource/123/items/default"
     }
   ],
   "excluded": []

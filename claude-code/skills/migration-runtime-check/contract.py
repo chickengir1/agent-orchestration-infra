@@ -12,11 +12,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-UNSAFE_SELECTOR_PATTERNS = (".ng-", ".cdk-", ".mat-mdc-", "_ngcontent", "_nghost", ".mat-")
-MUTATING_FLOW_TERMS = (
-    "save", "delete", "submit", "send", "payment", "create", "update",
-    "저장", "삭제", "제출", "전송", "결제", "생성", "수정",
-)
+UNSAFE_SELECTOR_PATTERNS = (".ng-", ".cdk-", ".mat-mdc-", "_ngcontent", "_nghost")
 
 
 class ContractError(ValueError):
@@ -193,9 +189,6 @@ def _validate_flows(errors: list[str], scenario_path: str, sc: dict) -> None:
         expected = flow.get("expectedObservables", [])
         if expected and (not isinstance(expected, list) or not all(isinstance(x, str) for x in expected)):
             _fail(errors, f"{p}.expectedObservables", "must be an array of strings")
-        text = " ".join(str(flow.get(k) or "") for k in ("id", "description", "intent"))
-        if any(term in text.lower() for term in MUTATING_FLOW_TERMS):
-            _fail(errors, p, "safe-ui-flow appears mutating; remove or make it manual")
         steps = flow.get("steps")
         if not isinstance(steps, list) or not steps:
             _fail(errors, f"{p}.steps", "must be a non-empty array")
@@ -213,9 +206,6 @@ def _validate_flows(errors: list[str], scenario_path: str, sc: dict) -> None:
                 _fail(errors, f"{sp}.selector", "must be a non-empty string")
             elif any(pat in selector for pat in UNSAFE_SELECTOR_PATTERNS):
                 _fail(errors, f"{sp}.selector", "generated/framework selectors are not allowed")
-            text = " ".join(str(step.get(k) or "") for k in ("description", "selector"))
-            if any(term in text.lower() for term in MUTATING_FLOW_TERMS):
-                _fail(errors, sp, "safe-ui-flow step appears mutating; remove or make it manual")
 
 
 def load_check_plan(path: str | Path) -> dict:

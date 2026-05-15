@@ -9,18 +9,18 @@ Writes (stdout):
 
 Usage:
     python3 plan_helper.py \
-        --discover discover-libs-app.json \
-        --app libs-app \
-        --baseline-branch dev \
-        --candidate-branch sbe-web-v4-angular-migration \
+        --discover discover-<app>.json \
+        --app <app> \
+        --baseline-branch <baseline-branch> \
+        --candidate-branch <candidate-branch> \
         --base-url http://localhost:4200 \
-        --auth .auth/libs-app.json \
-        --context-id group-2-default \
-        --vars group_id=2 \
-        --labels "유료 학교,설정 가능 계정" \
-        --metadata-json '{"접근 대상":"2번 그룹","그룹 내 권한":"관리자"}' \
-        --known-unstable "lds-bars,lds-css,ngucarousel,Fetching" \
-        > check-plan-libs-app.json
+        --auth .auth/<app>.json \
+        --context-id <context-id> \
+        --vars resource_id=123 \
+        --labels "sample-label,another-label" \
+        --metadata-json '{"user_provided_key":"user_provided_value"}' \
+        --known-unstable "loading,placeholder" \
+        > check-plan-<app>.json
 """
 from __future__ import annotations
 

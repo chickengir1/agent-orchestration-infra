@@ -64,7 +64,7 @@
           },
           "vars": {
             "type": "object",
-            "description": "Route variable substitutions, e.g. {\"group_id\": \"2\"}.",
+            "description": "Route variable substitutions, e.g. {\"resource_id\": \"123\"}.",
             "additionalProperties": { "type": "string" }
           },
           "labels": {

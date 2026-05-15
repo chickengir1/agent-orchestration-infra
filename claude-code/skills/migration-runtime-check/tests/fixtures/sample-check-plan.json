@@ -1,24 +1,22 @@
 {
-  "app": "libs-app",
+  "app": "sample-app",
   "intent": "Sample plan used by synthetic tests.",
   "baseline": {
     "branch": "dev",
     "baseUrl": "http://localhost:4200"
   },
   "candidate": {
-    "branch": "sbe-web-v4-angular-migration",
+    "branch": "candidate",
     "baseUrl": "http://localhost:4200"
   },
   "auth": {
-    "storageState": ".auth/libs-app.json",
+    "storageState": ".auth/sample-app.json",
     "actor": "default",
     "role": "unknown"
   },
   "knownUnstable": [
-    "lds-bars",
-    "lds-css",
-    "ngucarousel",
-    "Fetching"
+    "loading",
+    "placeholder"
   ],
   "contexts": [
     {
@@ -29,16 +27,16 @@
       "metadata": {}
     },
     {
-      "id": "group-2-admin",
+      "id": "resource-123-primary",
       "auth": null,
       "vars": {
-        "group_id": "2"
+        "resource_id": "123"
       },
-      "labels": ["유료 학교", "설정 가능 계정"],
+      "labels": ["sample label", "primary context"],
       "metadata": {
-        "접근 대상": "2번 그룹",
-        "그룹 내 권한": "관리자",
-        "검증 의도": "설정 페이지 접근 유지"
+        "target": "resource 123",
+        "mode": "primary",
+        "intent": "preserve access to the sample page"
       }
     }
   ],

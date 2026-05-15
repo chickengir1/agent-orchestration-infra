@@ -235,18 +235,18 @@ def case_context_scoped_capture_layout() -> None:
         a = _scenario_cap("scenario-scoped", BASELINE)
         b = _scenario_cap("scenario-scoped", BASELINE)
         for cap in (a, b):
-            cap["contextId"] = "group-356352-school-admin"
+            cap["contextId"] = "resource-123-primary"
         b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         run = tmp / "run-x"
         page_dir = _write_capture(run, "A", a)
         _write_capture(run, "B", b)
-        expected_dir = run / "A" / "group-356352-school-admin" / "pages" / "scenario-scoped"
+        expected_dir = run / "A" / "resource-123-primary" / "pages" / "scenario-scoped"
         if page_dir != expected_dir or not (expected_dir / "capture.json").exists():
             fail("context_scoped_capture_layout", "capture not written under context-scoped layout", {"page_dir": str(page_dir)})
         diff = build_diff(run)
         if "scenario-scoped" not in diff["pages"]:
             fail("context_scoped_capture_layout", "context-scoped capture not loaded", {"pages": list(diff["pages"])})
-        if diff["pages"]["scenario-scoped"]["context"]["contextId"] != "group-356352-school-admin":
+        if diff["pages"]["scenario-scoped"]["context"]["contextId"] != "resource-123-primary":
             fail("context_scoped_capture_layout", "contextId not preserved", diff["pages"]["scenario-scoped"]["context"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -260,8 +260,7 @@ def case_branch_named_capture_layout() -> None:
         b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         run = tmp / "run-x"
         a_dir = _write_branch_capture(run, "dev", "A", "dev", a)
-        b_dir = _write_branch_capture(run, "sbe-web-v4-angular-migration", "B",
-                                      "sbe-web-v4-angular-migration", b)
+        b_dir = _write_branch_capture(run, "candidate", "B", "candidate", b)
         diff = build_diff(run)
         if "scenario-branch" not in diff["pages"]:
             fail("branch_named_capture_layout",
@@ -272,7 +271,7 @@ def case_branch_named_capture_layout() -> None:
             fail("branch_named_capture_layout",
                  "baseline screenshot path must use branch dir",
                  {"report": report, "a_dir": str(a_dir), "b_dir": str(b_dir)})
-        if "sbe-web-v4-angular-migration/default/pages/scenario-branch/page.png" not in report:
+        if "candidate/default/pages/scenario-branch/page.png" not in report:
             fail("branch_named_capture_layout",
                  "candidate screenshot path must use branch dir",
                  {"report": report, "a_dir": str(a_dir), "b_dir": str(b_dir)})
@@ -305,11 +304,11 @@ def case_expectedfinalpath_mismatch_skips_deep_diff() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
         a = _scenario_cap("scenario-redirected", BASELINE,
-                          expected_final_path="/group/2/settings/facultylist",
+                          expected_final_path="/resource/123/details",
                           final_path="/error")
         b = _scenario_cap("scenario-redirected", BASELINE,
-                          expected_final_path="/group/2/settings/facultylist",
-                          final_path="/group/2/settings/facultylist")
+                          expected_final_path="/resource/123/details",
+                          final_path="/resource/123/details")
         # Even if there were huge view differences, deep diff must not run
         b["view"]["headings"].append({"level": 9, "text": "MASSIVE-CHANGE"})
         run = tmp / "run-x"
@@ -464,12 +463,12 @@ def case_schema_allows_label_array_and_metadata_object() -> None:
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
     target = None
     for ctx in plan["contexts"]:
-        if ctx["id"] == "group-2-admin":
+        if ctx["id"] == "resource-123-primary":
             target = ctx
             break
     if target is None:
         fail("schema_allows_label_array_and_metadata_object",
-             "group-2-admin context missing", plan)
+             "resource-123-primary context missing", plan)
     labels = target.get("labels")
     if not isinstance(labels, list) or not all(isinstance(s, str) for s in labels):
         fail("schema_allows_label_array_and_metadata_object",
@@ -478,10 +477,9 @@ def case_schema_allows_label_array_and_metadata_object() -> None:
     if not isinstance(metadata, dict):
         fail("schema_allows_label_array_and_metadata_object",
              "metadata must be object", target)
-    # Korean key must be preserved verbatim
-    if "접근 대상" not in metadata:
+    if "target" not in metadata:
         fail("schema_allows_label_array_and_metadata_object",
-             "Korean metadata key not preserved", metadata)
+             "metadata key not preserved", metadata)
 
 
 def case_plan_helper_labels_and_metadata() -> None:
@@ -495,13 +493,13 @@ def case_plan_helper_labels_and_metadata() -> None:
             str(py),
             str(SKILL_DIR / "plan_helper.py"),
             "--discover", str(discover_fixture),
-            "--app", "libs-app",
+            "--app", "sample-app",
             "--baseline-branch", "dev",
             "--candidate-branch", "mig",
             "--base-url", "http://localhost:4200",
             "--context-id", "ctx-A",
-            "--labels", "유료 학교,설정 가능 계정",
-            "--metadata-json", '{"접근 대상":"2번 그룹","그룹 내 권한":"관리자"}',
+            "--labels", "sample label,another label",
+            "--metadata-json", '{"target":"resource 123","mode":"primary"}',
         ],
         capture_output=True, text=True, check=False,
     )
@@ -511,10 +509,10 @@ def case_plan_helper_labels_and_metadata() -> None:
              {"stdout": result.stdout, "stderr": result.stderr})
     plan = json.loads(result.stdout)
     ctx = plan["contexts"][0]
-    if ctx["labels"] != ["유료 학교", "설정 가능 계정"]:
+    if ctx["labels"] != ["sample label", "another label"]:
         fail("plan_helper_labels_and_metadata",
              "labels not parsed as array", ctx)
-    if ctx["metadata"] != {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}:
+    if ctx["metadata"] != {"target": "resource 123", "mode": "primary"}:
         fail("plan_helper_labels_and_metadata",
              "metadata not parsed as object", ctx)
 
@@ -527,16 +525,16 @@ def case_capture_preserves_labels_and_metadata() -> None:
         b = _scenario_cap("scenario-meta", BASELINE)
         b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         for cap in (a, b):
-            cap["labels"] = ["유료 학교", "설정 가능 계정"]
-            cap["metadata"] = {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}
+            cap["labels"] = ["sample label", "another label"]
+            cap["metadata"] = {"target": "resource 123", "mode": "primary"}
         run = tmp / "run-x"
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
         diff = build_diff(run)
         ctx = diff["pages"]["scenario-meta"]["context"]
-        if ctx["labels"] != ["유료 학교", "설정 가능 계정"]:
+        if ctx["labels"] != ["sample label", "another label"]:
             fail("capture_preserves_labels_and_metadata", "labels lost", ctx)
-        if ctx["metadata"].get("접근 대상") != "2번 그룹":
+        if ctx["metadata"].get("target") != "resource 123":
             fail("capture_preserves_labels_and_metadata", "metadata lost", ctx)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -549,14 +547,14 @@ def case_report_shows_labels_and_metadata() -> None:
         b = _scenario_cap("scenario-meta", BASELINE)
         b["view"]["headings"][0] = {"level": 1, "text": "Changed"}
         for cap in (a, b):
-            cap["labels"] = ["유료 학교", "설정 가능 계정"]
-            cap["metadata"] = {"접근 대상": "2번 그룹", "그룹 내 권한": "관리자"}
+            cap["labels"] = ["sample label", "another label"]
+            cap["metadata"] = {"target": "resource 123", "mode": "primary"}
         run = tmp / "run-x"
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
         diff = build_diff(run)
         report = render_report(diff)
-        for needle in ("유료 학교", "설정 가능 계정", "접근 대상", "그룹 내 권한"):
+        for needle in ("sample label", "another label", "target", "mode"):
             if needle not in report:
                 fail("report_shows_labels_and_metadata",
                      f"missing {needle!r} in report", {"report": report})
@@ -570,12 +568,12 @@ def case_compare_autoloads_plan_from_stamp() -> None:
         run = tmp / "run-x"
         a = _scenario_cap("scenario-noise", BASELINE)
         b = _scenario_cap("scenario-noise", BASELINE)
-        b["view"]["classes"]["lds-bars"] = 3
+        b["view"]["classes"]["loading-marker"] = 3
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
         plan_path = tmp / "check-plan.json"
         plan = json.loads((SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json").read_text(encoding="utf-8"))
-        plan["knownUnstable"] = ["lds-bars"]
+        plan["knownUnstable"] = ["loading-marker"]
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
         (run / "A").mkdir(parents=True, exist_ok=True)
         (run / "A" / "stamp.json").write_text(
@@ -583,7 +581,7 @@ def case_compare_autoloads_plan_from_stamp() -> None:
         )
         # autoload_plan must read planPath and return plan dict
         loaded = autoload_plan(run)
-        if loaded is None or "lds-bars" not in loaded.get("knownUnstable", []):
+        if loaded is None or "loading-marker" not in loaded.get("knownUnstable", []):
             fail("compare_autoloads_plan_from_stamp",
                  "plan not autoloaded", {"loaded": loaded})
         diff = build_diff(run, plan=loaded)
@@ -591,7 +589,7 @@ def case_compare_autoloads_plan_from_stamp() -> None:
         if entry is None:
             fail("compare_autoloads_plan_from_stamp",
                  "scenario missing", diff)
-        if "lds-bars" not in entry["noise"]["classes_added"]:
+        if "loading-marker" not in entry["noise"]["classes_added"]:
             fail("compare_autoloads_plan_from_stamp",
                  "noise not separated after autoload", entry)
         report = render_report(diff)
@@ -610,17 +608,17 @@ def case_schema_allows_scenario_flows() -> None:
     sc = plan["scenarios"][0]
     sc["flows"] = [
         {
-            "id": "open-permission-dropdown",
+            "id": "open-filter-panel",
             "kind": "safe-ui-flow",
-            "description": "권한 드롭다운 펼치기",
-            "intent": "사용자가 권한 드롭다운을 열어 선택지를 확인한다",
-            "expectedObservables": ["드롭다운 선택지가 화면에 보인다"],
+            "description": "Open a non-mutating panel",
+            "intent": "User opens a panel to inspect available options",
+            "expectedObservables": ["Panel contents are visible"],
             "snapshotAfterEachStep": True,
             "steps": [
                 {
                     "type": "click",
-                    "description": "권한 드롭다운 클릭",
-                    "selector": "[data-testid='permission-dropdown']",
+                    "description": "Open panel",
+                    "selector": "[data-testid='filter-panel-toggle']",
                 }
             ],
         }
@@ -1036,10 +1034,10 @@ def case_flow_step_noise_only_listed() -> None:
             "finalPath": "/p",
         }
         b_step_cap = json.loads(json.dumps(a_step_cap))
-        b_step_cap["view"]["classes"]["lds-bars"] = 1
+        b_step_cap["view"]["classes"]["loading-marker"] = 1
         _write_flow_step(run, "A", "scenario-flow-noise", "open-dd", 1, status="ok", step_capture=a_step_cap)
         _write_flow_step(run, "B", "scenario-flow-noise", "open-dd", 1, status="ok", step_capture=b_step_cap)
-        diff = build_diff(run, plan={"knownUnstable": ["lds-bars"]})
+        diff = build_diff(run, plan={"knownUnstable": ["loading-marker"]})
         report = render_report(diff)
         if "## Scenario Matrix" not in report or "scenario-flow-noise" not in report:
             fail("flow_step_noise_only_listed", "flow noise summary missing", {"report": report})
@@ -1053,8 +1051,8 @@ def case_noise_only_scenario_listed_in_dedicated_section() -> None:
         a = _scenario_cap("scenario-noise-only", BASELINE)
         b = _scenario_cap("scenario-noise-only", BASELINE)
         # ONLY a knownUnstable signal — no other diff
-        b["view"]["classes"]["lds-bars"] = 5
-        plan = {"knownUnstable": ["lds-bars"]}
+        b["view"]["classes"]["loading-marker"] = 5
+        plan = {"knownUnstable": ["loading-marker"]}
         run = tmp / "run-x"
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
@@ -1080,14 +1078,14 @@ def case_noise_candidate_separated() -> None:
         a = _scenario_cap("scenario-noise", BASELINE)
         b = _scenario_cap("scenario-noise", BASELINE)
         # Inject noise (matches knownUnstable) and one main signal
-        b["view"]["classes"]["lds-bars"] = 3                # noise (classes.added)
-        b["view"]["classes"]["lds-css"] = 1                 # noise (classes.added)
-        b["view"]["texts"].append("Fetching info...")        # noise (texts.added)
-        b["console"].append({"type": "warning", "text": "ngucarousel-xyz mounted"})  # noise (non-error console)
+        b["view"]["classes"]["loading-marker"] = 3          # noise (classes.added)
+        b["view"]["classes"]["placeholder-marker"] = 1      # noise (classes.added)
+        b["view"]["texts"].append("Loading info...")        # noise (texts.added)
+        b["console"].append({"type": "warning", "text": "widget-placeholder mounted"})  # noise (non-error console)
         b["view"]["classes"]["genuinely-new"] = 1            # main signal
         # Error console must NOT be filtered as noise even if pattern matches
-        b["console"].append({"type": "error", "text": "Fetching info failed catastrophically"})
-        plan = {"knownUnstable": ["lds-bars", "lds-css", "Fetching", "ngucarousel"]}
+        b["console"].append({"type": "error", "text": "Loading info failed catastrophically"})
+        plan = {"knownUnstable": ["loading-marker", "placeholder-marker", "Loading", "widget-placeholder"]}
         run = tmp / "run-x"
         _write_capture(run, "A", a)
         _write_capture(run, "B", b)
@@ -1097,18 +1095,18 @@ def case_noise_candidate_separated() -> None:
             fail("noise_candidate_separated", "scenario not joined", diff)
         d = entry["diff"]
         noise = entry["noise"]
-        if "lds-bars" not in noise["classes_added"] or "lds-css" not in noise["classes_added"]:
+        if "loading-marker" not in noise["classes_added"] or "placeholder-marker" not in noise["classes_added"]:
             fail("noise_candidate_separated", "noise classes not separated", noise)
-        if "lds-bars" in d["classes"]["added"] or "lds-css" in d["classes"]["added"]:
+        if "loading-marker" in d["classes"]["added"] or "placeholder-marker" in d["classes"]["added"]:
             fail("noise_candidate_separated", "noise leaked into main diff", d["classes"])
         if "genuinely-new" not in d["classes"]["added"]:
             fail("noise_candidate_separated", "main class signal lost", d["classes"])
-        if not any("Fetching" in s for s in noise["texts_added"]):
+        if not any("Loading" in s for s in noise["texts_added"]):
             fail("noise_candidate_separated", "noise text not separated", noise)
-        if not any(typ == "warning" and "ngucarousel" in text for typ, text in noise["console_b_new"]):
+        if not any(typ == "warning" and "widget-placeholder" in text for typ, text in noise["console_b_new"]):
             fail("noise_candidate_separated", "warning console not separated", noise)
         # Error console with matching substring must remain in main diff
-        if not any(typ == "error" and "Fetching" in text for typ, text in d["console"]["b_new"]):
+        if not any(typ == "error" and "Loading" in text for typ, text in d["console"]["b_new"]):
             fail("noise_candidate_separated", "error console must not be classified as noise", d["console"])
         # Render report and confirm noise lives in Signal section.
         report = render_report(diff)
