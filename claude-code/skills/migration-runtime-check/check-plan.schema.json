@@ -116,6 +116,46 @@
               "enum": ["page-capture", "actions", "console-runtime"]
             },
             "description": "Which signal groups to evaluate. Empty array implies all three."
+          },
+          "actions": {
+            "type": "array",
+            "description": "Approved safe UI actions to execute after the initial capture. v1 supports click only.",
+            "items": {
+              "type": "object",
+              "required": ["id", "kind", "steps"],
+              "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string" },
+                "kind": {
+                  "type": "string",
+                  "enum": ["safe-ui-action"]
+                },
+                "description": { "type": "string" },
+                "snapshotAfterEachStep": {
+                  "type": "boolean",
+                  "description": "Capture step snapshot after each step. Default true."
+                },
+                "steps": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": ["type", "selector"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["click"]
+                      },
+                      "selector": {
+                        "type": "string",
+                        "description": "Prefer [data-testid=...]; aria-label / role+name acceptable. Generated class selectors are not allowed."
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -62,6 +62,125 @@ def resolve_storage_state(plan: dict, context_meta: dict) -> str | None:
     return plan.get("auth", {}).get("storageState")
 
 
+def make_action_result(
+    *,
+    action_id: str,
+    step: int,
+    step_type: str,
+    selector: str,
+    status: str,
+    error: str | None = None,
+    before_path: str = "",
+    after_path: str = "",
+) -> dict:
+    """Build the action.json payload written next to each step snapshot.
+
+    status ∈ {ok, selector-not-found, selector-ambiguous, error, skipped}
+    """
+    return {
+        "actionId": action_id,
+        "step": step,
+        "type": step_type,
+        "selector": selector,
+        "status": status,
+        "error": error,
+        "beforeFinalPath": before_path,
+        "afterFinalPath": after_path,
+    }
+
+
+def run_action_steps(page, action: dict, base_dir: Path, extract_js: str) -> None:
+    """Execute an action's steps in order, write step snapshots under base_dir.
+
+    base_dir = <pageDir>/actions/<actionId>. step-1, step-2, ... subdirs created.
+    Stops on first non-ok status. Locator policy: count() must be exactly 1.
+    """
+    snapshot_each = action.get("snapshotAfterEachStep", True)
+    aborted = False
+    for i, step in enumerate(action["steps"], start=1):
+        step_dir = base_dir / f"step-{i}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        sel = step["selector"]
+        before_path = url_path(page.url)
+        if aborted:
+            result = make_action_result(
+                action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+                status="skipped", error="previous step did not complete",
+                before_path=before_path, after_path=before_path,
+            )
+            (step_dir / "action.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            continue
+
+        status = "ok"
+        error: str | None = None
+        try:
+            count = page.locator(sel).count()
+        except Exception as e:
+            count = -1
+            status = "error"
+            error = f"selector evaluation failed: {e}"
+        if status == "ok":
+            if count == 0:
+                status = "selector-not-found"
+                error = "0 elements matched"
+            elif count > 1:
+                status = "selector-ambiguous"
+                error = f"{count} elements matched; expected exactly 1"
+
+        if status == "ok":
+            try:
+                if step["type"] == "click":
+                    page.locator(sel).click(timeout=5000)
+                else:
+                    status = "error"
+                    error = f"unsupported step type: {step['type']}"
+            except Exception as e:
+                status = "error"
+                error = f"action execution failed: {e}"
+
+        if status == "ok":
+            page.wait_for_timeout(300)
+
+        after_path = url_path(page.url)
+        result = make_action_result(
+            action_id=action["id"], step=i, step_type=step["type"], selector=sel,
+            status=status, error=error,
+            before_path=before_path, after_path=after_path,
+        )
+        (step_dir / "action.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+        if snapshot_each:
+            try:
+                surface = page.evaluate(extract_js, {"masks": []}) or {}
+                step_cap = {
+                    "view": surface.get("view", {}),
+                    "actions": surface.get("actions", []),
+                    "meta": surface.get("meta", {}),
+                    "finalUrl": page.url,
+                    "finalPath": after_path,
+                }
+                (step_dir / "capture.json").write_text(
+                    json.dumps(step_cap, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as e:
+                # Snapshot failure does not abort the action sequence; recorded as note in action.json
+                result["error"] = (result.get("error") or "") + f" | snapshot failed: {e}"
+                (step_dir / "action.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            try:
+                page.screenshot(path=str(step_dir / "page.png"), full_page=True)
+            except Exception:
+                pass
+
+        if status != "ok":
+            aborted = True
+
+
 def main() -> int:
     args = parse_args()
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
@@ -172,6 +291,15 @@ def main() -> int:
                 page.screenshot(path=str(page_dir / "page.png"), full_page=True)
             except Exception:
                 pass
+
+            scenario_actions: list[dict] = sc.get("actions") or []
+            for action in scenario_actions:
+                action_dir = page_dir / "actions" / action["id"]
+                action_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    run_action_steps(page, action, action_dir, EXTRACT_JS)
+                except Exception as e:
+                    err_buf.append(f"action {action.get('id')} crashed: {e}")
             page.close()
             summary.append({
                 "scenarioId": scenario_id,

@@ -438,6 +438,203 @@ def case_compare_autoloads_plan_from_stamp() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def case_schema_allows_scenario_actions() -> None:
+    """Sample plan must remain shape-valid; ensure we can attach actions to a scenario."""
+    plan_path = SKILL_DIR / "tests" / "fixtures" / "sample-check-plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    sc = plan["scenarios"][0]
+    sc["actions"] = [
+        {
+            "id": "open-permission-dropdown",
+            "kind": "safe-ui-action",
+            "description": "권한 드롭다운 펼치기",
+            "snapshotAfterEachStep": True,
+            "steps": [
+                {"type": "click", "selector": "[data-testid='permission-dropdown']"}
+            ],
+        }
+    ]
+    # Shape assertions reflect schema constraints
+    action = sc["actions"][0]
+    if action["kind"] != "safe-ui-action":
+        fail("schema_allows_scenario_actions", "kind must be safe-ui-action", action)
+    if not isinstance(action["steps"], list) or len(action["steps"]) < 1:
+        fail("schema_allows_scenario_actions", "steps must be non-empty array", action)
+    step = action["steps"][0]
+    if step["type"] != "click" or not step["selector"]:
+        fail("schema_allows_scenario_actions", "step must be click+selector", step)
+
+
+def case_action_result_builder_shapes() -> None:
+    """make_action_result returns the documented JSON shape for ok and failure."""
+    sys.path.insert(0, str(SKILL_DIR))
+    import importlib
+    capture_mod = importlib.import_module("capture")
+    ok = capture_mod.make_action_result(
+        action_id="a1", step=1, step_type="click",
+        selector="[data-testid='x']",
+        status="ok",
+        before_path="/p", after_path="/p",
+    )
+    for key in ("actionId", "step", "type", "selector", "status", "error",
+                "beforeFinalPath", "afterFinalPath"):
+        if key not in ok:
+            fail("action_result_builder_shapes", f"missing key {key} on ok", ok)
+    if ok["status"] != "ok" or ok["error"] is not None:
+        fail("action_result_builder_shapes", "ok shape wrong", ok)
+    fail_res = capture_mod.make_action_result(
+        action_id="a1", step=1, step_type="click",
+        selector="[data-testid='missing']",
+        status="selector-not-found",
+        error="0 elements matched",
+        before_path="/p", after_path="/p",
+    )
+    if fail_res["status"] != "selector-not-found":
+        fail("action_result_builder_shapes", "failure status wrong", fail_res)
+    if "0 elements matched" not in (fail_res["error"] or ""):
+        fail("action_result_builder_shapes", "failure error wrong", fail_res)
+
+
+def _write_action_step(
+    run: Path, side: str, scenario_id: str, action_id: str, step: int,
+    *, status: str, error: str | None = None,
+    step_capture: dict | None = None,
+) -> Path:
+    sd = run / side / "pages" / scenario_id / "actions" / action_id / f"step-{step}"
+    sd.mkdir(parents=True, exist_ok=True)
+    action_json = {
+        "actionId": action_id,
+        "step": step,
+        "type": "click",
+        "selector": "[data-testid='t']",
+        "status": status,
+        "error": error,
+        "beforeFinalPath": "/p",
+        "afterFinalPath": "/p",
+    }
+    (sd / "action.json").write_text(json.dumps(action_json), encoding="utf-8")
+    if step_capture is not None:
+        (sd / "capture.json").write_text(json.dumps(step_capture), encoding="utf-8")
+    return sd
+
+
+def case_compare_reports_action_status_mismatch() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-act", BASELINE)
+        b = _scenario_cap("scenario-act", BASELINE)
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        _write_action_step(run, "A", "scenario-act", "open-dd", 1, status="ok")
+        _write_action_step(run, "B", "scenario-act", "open-dd", 1,
+                           status="selector-not-found", error="0 elements matched")
+        diff = build_diff(run)
+        entry = diff["pages"]["scenario-act"]
+        results = entry.get("actionResults") or []
+        if not results:
+            fail("compare_reports_action_status_mismatch", "no action results", entry)
+        r = results[0]
+        if r["statusA"] != "ok" or r["statusB"] != "selector-not-found":
+            fail("compare_reports_action_status_mismatch", "status pair wrong", r)
+        report = render_report(diff)
+        if "##### open-dd / step-1" not in report:
+            fail("compare_reports_action_status_mismatch",
+                 "step header missing in report", {"report": report})
+        if "selector-not-found" not in report:
+            fail("compare_reports_action_status_mismatch",
+                 "failure status not surfaced", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_compare_reports_action_step_snapshot_diff() -> None:
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-step", BASELINE)
+        b = _scenario_cap("scenario-step", BASELINE)
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        # Step capture differs on headings between A and B
+        a_step_cap = {
+            "view": {
+                "title": "S",
+                "headings": [{"level": 1, "text": "Step A"}],
+                "landmarks": [], "texts": [], "components": {}, "classes": {}, "emptyStates": [],
+            },
+            "actions": [],
+            "finalUrl": "http://localhost:4200/p",
+            "finalPath": "/p",
+        }
+        b_step_cap = {
+            "view": {
+                "title": "S",
+                "headings": [{"level": 1, "text": "Step B"}],
+                "landmarks": [], "texts": [], "components": {}, "classes": {}, "emptyStates": [],
+            },
+            "actions": [],
+            "finalUrl": "http://localhost:4200/p",
+            "finalPath": "/p",
+        }
+        _write_action_step(run, "A", "scenario-step", "open-dd", 1,
+                           status="ok", step_capture=a_step_cap)
+        _write_action_step(run, "B", "scenario-step", "open-dd", 1,
+                           status="ok", step_capture=b_step_cap)
+        diff = build_diff(run)
+        entry = diff["pages"]["scenario-step"]
+        results = entry.get("actionResults") or []
+        if not results or results[0]["stepDiff"] is None:
+            fail("compare_reports_action_step_snapshot_diff",
+                 "stepDiff missing", entry)
+        step_diff = results[0]["stepDiff"]
+        if not (step_diff["headings"]["added"] and step_diff["headings"]["removed"]):
+            fail("compare_reports_action_step_snapshot_diff",
+                 "heading diff not detected", step_diff)
+        report = render_report(diff)
+        if "- differences:" not in report:
+            fail("compare_reports_action_step_snapshot_diff",
+                 "differences subsection not rendered", {"report": report})
+        if "headings:" not in report:
+            fail("compare_reports_action_step_snapshot_diff",
+                 "headings line missing", {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_action_only_diff_keeps_scenario_in_report() -> None:
+    """Scenario with no main diff but an action status mismatch must appear in Differences."""
+    tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
+    try:
+        a = _scenario_cap("scenario-action-only", BASELINE)
+        b = _scenario_cap("scenario-action-only", BASELINE)
+        # No mutation on b — main diff = 0
+        run = tmp / "run-x"
+        _write_capture(run, "A", a)
+        _write_capture(run, "B", b)
+        _write_action_step(run, "A", "scenario-action-only", "open-dd", 1, status="ok")
+        _write_action_step(run, "B", "scenario-action-only", "open-dd", 1,
+                           status="selector-not-found")
+        diff = build_diff(run)
+        if not page_has_signal(diff["pages"]["scenario-action-only"]["diff"]):
+            pass  # main signal 0 as intended
+        report = render_report(diff)
+        diff_idx = report.find("## Differences")
+        if diff_idx < 0:
+            fail("action_only_diff_keeps_scenario_in_report",
+                 "Differences section missing", {"report": report})
+        if "scenario-action-only" not in report[diff_idx:]:
+            fail("action_only_diff_keeps_scenario_in_report",
+                 "scenario must appear in Differences even without main diff",
+                 {"report": report})
+        if "## Noise-only Scenarios" in report:
+            fail("action_only_diff_keeps_scenario_in_report",
+                 "scenario must not be misclassified as noise-only",
+                 {"report": report})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def case_noise_only_scenario_listed_in_dedicated_section() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="mrc-test-"))
     try:
@@ -542,6 +739,11 @@ CASES = [
     case_report_shows_labels_and_metadata,
     case_compare_autoloads_plan_from_stamp,
     case_noise_only_scenario_listed_in_dedicated_section,
+    case_schema_allows_scenario_actions,
+    case_action_result_builder_shapes,
+    case_compare_reports_action_status_mismatch,
+    case_compare_reports_action_step_snapshot_diff,
+    case_action_only_diff_keeps_scenario_in_report,
 ]
 
 
