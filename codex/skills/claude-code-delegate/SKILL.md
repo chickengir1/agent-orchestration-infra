@@ -23,11 +23,11 @@ Reject delegation when the task requires unresolved product judgment, broad arch
 3. Define the objective, allowed files, forbidden files, constraints, validation commands, and expected report format.
 4. Create a job directory under `.codex/delegations/<job-id>/`.
 5. Run `scripts/delegate_claude.py` with the objective and file scope, or write the job spec manually when the runner is not suitable.
-6. Let Claude Code edit only inside the assigned scope.
-7. Run `scripts/check_scope.py` or inspect its saved report.
+6. Let Claude Code edit only inside the assigned scope. By default it does not get Bash.
+7. Inspect the saved scope report and runner validation report.
 8. Review the resulting git diff yourself.
 9. Repair or reject any incorrect, overbroad, or scope-violating patch.
-10. Run final validation as Codex before reporting completion.
+10. Run any additional final validation as Codex before reporting completion.
 
 ## Runner Quick Start
 
@@ -42,7 +42,9 @@ python3 ~/.codex/skills/claude-code-delegate/scripts/delegate_claude.py \
   --validate "pnpm test"
 ```
 
-The runner writes `.codex/delegations/<job-id>/task.md`, invokes `claude -p`, captures logs, records the diff, and checks file scope.
+The runner writes `.codex/delegations/<job-id>/task.md`, invokes `claude -p`, captures logs, records the diff, checks file scope, and executes `--validate` commands itself after Claude exits.
+
+Default Claude tools are `Read,Edit,Write`. `Bash` is intentionally disabled so Claude does not burn turns on validation commands that the local permission layer may deny. Use `--allow-worker-bash` only for a job that truly needs shell inspection or mechanical commands during the patch.
 
 The runner uses `--no-session-persistence` by default. Add `--bare` only when Claude Code has API-key or auth-helper credentials available; bare mode does not read OAuth/keychain authentication.
 
@@ -58,7 +60,8 @@ Include these constraints in every task, either through the runner or manually:
 - Do not refactor unrelated code.
 - Apply the smallest correct patch that satisfies the objective.
 - Write code inside the Code Shape Conventions generated from the local `fundamental-reviewer` principles.
-- Report only changed files, summary, validation, and blockers.
+- Do not run validation commands unless the task explicitly enables worker Bash.
+- Report only changed files, summary, validation not run by worker, and blockers.
 
 The conventions are writing constraints, not an invitation to perform a broad cleanup. Claude Code should apply them only inside the assigned patch.
 

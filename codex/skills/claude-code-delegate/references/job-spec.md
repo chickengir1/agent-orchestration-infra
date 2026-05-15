@@ -22,8 +22,8 @@ Include behavioral limits such as no unrelated refactors, no public API changes,
 ### Code Shape Conventions
 Include the condensed writing conventions from `references/code-shape-conventions.md`. These are patch-local constraints, not broad cleanup permission.
 
-### Validation
-List commands Claude Code may run. Keep commands bounded and repo-local.
+### Runner Validation
+List commands the delegation runner will execute after Claude Code exits. Claude Code must not run them unless worker Bash was explicitly enabled for the job.
 
 ### Report Format
 Require a concise final report:
@@ -36,7 +36,7 @@ summary:
 - change
 
 validation:
-- command: result
+- not run by worker; runner will execute validation
 
 blockers:
 - blocker or none
@@ -71,7 +71,7 @@ Claude Code owns only the assigned patch.
 - Keep the happy path flat.
 - Preserve the local return convention.
 
-## Validation
+## Runner Validation
 - pnpm lint
 
 ## Report Format

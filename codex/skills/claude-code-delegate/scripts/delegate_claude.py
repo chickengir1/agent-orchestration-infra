@@ -39,6 +39,61 @@ def run_git_diff(repo: Path) -> str:
     return result.stdout
 
 
+def run_validation_commands(repo: Path, commands: list[str], timeout: int) -> list[dict]:
+    results: list[dict] = []
+    for command in commands:
+        try:
+            proc = subprocess.run(
+                command,
+                cwd=repo,
+                shell=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            results.append(
+                {
+                    "command": command,
+                    "returncode": proc.returncode,
+                    "stdout": proc.stdout,
+                    "stderr": proc.stderr,
+                    "timed_out": False,
+                }
+            )
+        except subprocess.TimeoutExpired as exc:
+            results.append(
+                {
+                    "command": command,
+                    "returncode": 124,
+                    "stdout": exc.stdout or "",
+                    "stderr": exc.stderr or "",
+                    "timed_out": True,
+                }
+            )
+    return results
+
+
+def render_validation_text(results: list[dict]) -> str:
+    if not results:
+        return "No validation commands configured.\n"
+
+    chunks: list[str] = []
+    for item in results:
+        chunks.append(f"$ {item['command']}")
+        chunks.append(f"returncode: {item['returncode']}")
+        if item.get("timed_out"):
+            chunks.append("timed_out: true")
+        if item.get("stdout"):
+            chunks.append("stdout:")
+            chunks.append(str(item["stdout"]).rstrip())
+        if item.get("stderr"):
+            chunks.append("stderr:")
+            chunks.append(str(item["stderr"]).rstrip())
+        chunks.append("")
+    return "\n".join(chunks).rstrip() + "\n"
+
+
 def write_lines(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(lines).rstrip() + ("\n" if lines else ""), encoding="utf-8")
 
@@ -88,14 +143,17 @@ Write code within these conventions. Do not perform a broad cleanup pass just to
 - Local decision context: keep decision evidence near the decision, or name the decision at the call site.
 - Invalid states hard to represent: validate boundaries, narrow before use, and prefer explicit variants or domain-specific shapes.
 
-## Validation
+## Runner Validation
 {validation_block}
+
+Claude Code must not run these commands unless Codex explicitly enabled worker Bash for this job.
+The delegation runner executes them after Claude Code exits and records the result.
 
 ## Report Format
 Report only:
 - changed files
 - what changed
-- validation run
+- validation not run by worker; runner will execute validation
 - blockers, if any
 """
 
@@ -109,6 +167,17 @@ def main() -> int:
     parser.add_argument("--job-id", help="Optional stable job id.")
     parser.add_argument("--dry-run", action="store_true", help="Write job files without invoking Claude.")
     parser.add_argument("--max-turns", default="6", help="Claude max turns. Defaults to 6.")
+    parser.add_argument(
+        "--allow-worker-bash",
+        action="store_true",
+        help="Allow Claude Code to use Bash. Off by default; runner validation still runs after Claude exits.",
+    )
+    parser.add_argument(
+        "--validation-timeout",
+        type=int,
+        default=600,
+        help="Timeout in seconds for each runner validation command. Defaults to 600.",
+    )
     parser.add_argument("--model", help="Optional Claude model or alias.")
     parser.add_argument("--max-budget-usd", help="Optional Claude Code API budget cap.")
     parser.add_argument(
@@ -156,7 +225,7 @@ def main() -> int:
         "--permission-mode",
         "acceptEdits",
         "--tools",
-        "Read,Edit,Write,Bash",
+        "Read,Edit,Write,Bash" if args.allow_worker_bash else "Read,Edit,Write",
         "--append-system-prompt-file",
         str(worker_prompt_path),
     ]
@@ -200,16 +269,28 @@ def main() -> int:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    validation_results = run_validation_commands(repo, args.validate, args.validation_timeout)
+    validation_ok = all(item["returncode"] == 0 for item in validation_results)
+    (job_dir / "validation-results.json").write_text(
+        json.dumps(validation_results, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (job_dir / "validation-results.txt").write_text(
+        render_validation_text(validation_results),
+        encoding="utf-8",
+    )
 
     result = {
-        "ok": proc.returncode == 0 and scope_proc.returncode == 0,
+        "ok": proc.returncode == 0 and scope_proc.returncode == 0 and validation_ok,
         "job_id": job_id,
         "job_dir": str(job_dir),
         "claude_returncode": proc.returncode,
         "scope_returncode": scope_proc.returncode,
+        "validation_ok": validation_ok,
         "stdout_log": str(job_dir / "stdout.log"),
         "stderr_log": str(job_dir / "stderr.log"),
         "scope_report": str(scope_report),
+        "validation_results": str(job_dir / "validation-results.json"),
     }
     (job_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2))
