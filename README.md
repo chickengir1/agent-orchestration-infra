@@ -70,6 +70,7 @@ Claude Code:
 - `edit-pr`
 - `fundamental-review`
 - `handoff`
+- `runtime-scenario-pack`
 - `reply-review`
 - `test-matrix`
 - `trace-api`
