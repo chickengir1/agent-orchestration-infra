@@ -14,50 +14,16 @@ from pathlib import Path
 
 HOME = Path.home()
 
-CLAUDE_AGENT_FILES = [
-    "fundamental-reviewer.md",
-    "logic-reviewer.md",
-    "structure-reviewer.md",
-    "task-planner.md",
-    "type-reviewer.md",
-]
-
-CLAUDE_SKILLS = [
-    "edit-pr",
-    "fundamental-review",
-    "handoff",
-    "runtime-scenario-pack",
-    "reply-review",
-    "test-matrix",
-    "trace-api",
-    "trace-flow",
-]
-
-CODEX_AGENT_FILES = [
-    "fundamental-reviewer.toml",
-    "logic-reviewer.toml",
-    "structure-reviewer.toml",
-    "type-reviewer.toml",
-]
-
-AGENTS_SKILLS = [
-    "edit-pr",
-    "fundamental-review",
-    "handoff",
-    "reply-review",
-    "review-team",
-    "test-matrix",
-    "trace-api",
-    "trace-flow",
-]
-
-CODEX_SKILLS = [
-    "claude-code-delegate",
-]
+CLAUDE_AGENTS_DIR = HOME / ".claude" / "agents"
+CLAUDE_SKILLS_DIR = HOME / ".claude" / "skills"
+CODEX_AGENTS_DIR = HOME / ".codex" / "agents"
+CODEX_SKILLS_DIR = HOME / ".codex" / "skills"
+AGENTS_SKILLS_DIR = HOME / ".agents" / "skills"
 
 EXCLUDED_DIRS = {
     ".auth",
     ".git",
+    ".system",
     ".venv",
     "__pycache__",
 }
@@ -69,6 +35,10 @@ EXCLUDED_FILES = {
 EXCLUDED_SUFFIXES = {
     ".pyc",
     ".pyo",
+}
+
+NON_AGENT_FILES = {
+    "README.md",
 }
 
 
@@ -114,26 +84,60 @@ def copy_tree(src: Path, dest: Path) -> None:
     shutil.copytree(src, dest, ignore=should_ignore)
 
 
+def is_excluded(path: Path) -> bool:
+    name = path.name
+    return (
+        name in EXCLUDED_DIRS
+        or name in EXCLUDED_FILES
+        or any(name.endswith(suffix) for suffix in EXCLUDED_SUFFIXES)
+    )
+
+
+def discover_agent_files(src: Path, suffix: str) -> list[Path]:
+    if not src.exists():
+        return []
+    return sorted(
+        path
+        for path in src.iterdir()
+        if path.is_file()
+        and path.suffix == suffix
+        and path.name not in NON_AGENT_FILES
+        and not is_excluded(path)
+    )
+
+
+def discover_skill_dirs(src: Path) -> list[Path]:
+    if not src.exists():
+        return []
+    return sorted(
+        path
+        for path in src.iterdir()
+        if path.is_dir()
+        and not is_excluded(path)
+        and ((path / "SKILL.md").is_file() or (path / "skill.md").is_file())
+    )
+
+
 def sync(repo: Path) -> None:
     reset_dir(repo / "claude-code" / "agents")
     reset_dir(repo / "claude-code" / "skills")
     reset_dir(repo / "codex" / "agents")
     reset_dir(repo / "codex" / "skills")
 
-    for filename in CLAUDE_AGENT_FILES:
-        copy_file(HOME / ".claude" / "agents" / filename, repo / "claude-code" / "agents" / filename)
+    for src in discover_agent_files(CLAUDE_AGENTS_DIR, ".md"):
+        copy_file(src, repo / "claude-code" / "agents" / src.name)
 
-    for skill in CLAUDE_SKILLS:
-        copy_tree(HOME / ".claude" / "skills" / skill, repo / "claude-code" / "skills" / skill)
+    for src in discover_skill_dirs(CLAUDE_SKILLS_DIR):
+        copy_tree(src, repo / "claude-code" / "skills" / src.name)
 
-    for filename in CODEX_AGENT_FILES:
-        copy_file(HOME / ".codex" / "agents" / filename, repo / "codex" / "agents" / filename)
+    for src in discover_agent_files(CODEX_AGENTS_DIR, ".toml"):
+        copy_file(src, repo / "codex" / "agents" / src.name)
 
-    for skill in AGENTS_SKILLS:
-        copy_tree(HOME / ".agents" / "skills" / skill, repo / "codex" / "skills" / skill)
+    for src in discover_skill_dirs(AGENTS_SKILLS_DIR):
+        copy_tree(src, repo / "codex" / "skills" / src.name)
 
-    for skill in CODEX_SKILLS:
-        copy_tree(HOME / ".codex" / "skills" / skill, repo / "codex" / "skills" / skill)
+    for src in discover_skill_dirs(CODEX_SKILLS_DIR):
+        copy_tree(src, repo / "codex" / "skills" / src.name)
 
 
 def has_changes(repo: Path) -> bool:
