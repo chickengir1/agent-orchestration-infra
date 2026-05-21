@@ -33,6 +33,10 @@ def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def now_order() -> int:
+    return time.time_ns()
+
+
 def require_unsandboxed() -> None:
     if os.environ.get("CODEX_SANDBOX"):
         raise SystemExit("claude-code-delegate must run outside the Codex sandbox")
@@ -219,12 +223,13 @@ def dispatch_prompt(task: dict[str, Any]) -> str:
     )
 
 
-async def worker_loop(worker_id: int, workdir: str, queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
+async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
     worker_file = WORKERS_DIR / f"worker-{worker_id}.json"
     options = ClaudeAgentOptions(
         cwd=workdir,
+        model=model,
         permission_mode="acceptEdits",
         add_dirs=["/private/tmp"],
     )
@@ -267,7 +272,8 @@ async def worker_loop(worker_id: int, workdir: str, queue: asyncio.Queue[str], s
 async def enqueue_loop(queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
     scheduled: set[str] = set()
     while not stop_event.is_set():
-        for path in sorted(QUEUE_DIR.glob("*.json")):
+        candidates: list[tuple[str, str]] = []
+        for path in QUEUE_DIR.glob("*.json"):
             task_id = path.stem
             if task_id in scheduled:
                 continue
@@ -276,6 +282,9 @@ async def enqueue_loop(queue: asyncio.Queue[str], stop_event: asyncio.Event) -> 
             except (OSError, json.JSONDecodeError):
                 continue
             if task.get("status") == "queued":
+                candidates.append((str(task.get("queued_order") or task.get("queued_at") or task.get("created_at") or ""), task_id))
+        for _, task_id in sorted(candidates):
+            if task_id not in scheduled:
                 scheduled.add(task_id)
                 await queue.put(task_id)
         await asyncio.sleep(0.25)
@@ -292,13 +301,14 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
             "status": "running",
             "workdir": args.workdir,
             "workers": args.workers,
+            "model": args.model,
             "started_at": now_iso(),
             "updated_at": now_iso(),
         },
     )
     queue: asyncio.Queue[str] = asyncio.Queue()
     stop_event = asyncio.Event()
-    workers = [asyncio.create_task(worker_loop(i + 1, args.workdir, queue, stop_event)) for i in range(args.workers)]
+    workers = [asyncio.create_task(worker_loop(i + 1, args.workdir, args.model, queue, stop_event)) for i in range(args.workers)]
     enqueuer = asyncio.create_task(enqueue_loop(queue, stop_event))
     try:
         while not STOP_FILE.exists():
@@ -317,6 +327,7 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
                 "status": "stopped",
                 "workdir": args.workdir,
                 "workers": args.workers,
+                "model": args.model,
                 "updated_at": now_iso(),
             },
         )
@@ -335,7 +346,17 @@ def start(args: argparse.Namespace) -> None:
     stderr_path = LOGS_DIR / "daemon.stderr.log"
     with stdout_path.open("a") as stdout, stderr_path.open("a") as stderr:
         proc = subprocess.Popen(
-            [str(VENV_PYTHON), str(Path(__file__).resolve()), "daemon", "--workdir", args.workdir, "--workers", str(args.workers)],
+            [
+                str(VENV_PYTHON),
+                str(Path(__file__).resolve()),
+                "daemon",
+                "--workdir",
+                args.workdir,
+                "--workers",
+                str(args.workers),
+                "--model",
+                args.model,
+            ],
             cwd=args.workdir,
             stdout=stdout,
             stderr=stderr,
@@ -346,6 +367,7 @@ def start(args: argparse.Namespace) -> None:
         "status": "ready",
         "workdir": args.workdir,
         "workers": args.workers,
+        "model": args.model,
         "runtime_dir": str(RUNTIME_DIR),
         "tasks_dir": str(TASKS_DIR),
         "queue_dir": str(QUEUE_DIR),
@@ -401,8 +423,9 @@ def send(args: argparse.Namespace) -> None:
     if args.dry_run:
         task = update_task(task, "dry-run", dry_run=True)
     else:
-        task = update_task(task, "queued", queued_at=now_iso())
-        write_json(queue_item_path(task_id), {"task_id": task_id, "queued_at": task["updated_at"]})
+        queued_order = now_order()
+        task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order)
+        write_json(queue_item_path(task_id), {"task_id": task_id, "queued_at": task["updated_at"], "queued_order": queued_order})
     state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
     write_state(state)
     print(f"task_id={task_id}")
@@ -424,12 +447,35 @@ def sync_last_task(state: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[s
     return state
 
 
+def summarize_task(task: dict[str, Any]) -> dict[str, Any]:
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    return {
+        key: value
+        for key, value in {
+            "id": task.get("id"),
+            "status": task.get("status"),
+            "worker_id": task.get("worker_id"),
+            "session_id": task.get("session_id"),
+            "created_at": task.get("created_at"),
+            "queued_at": task.get("queued_at"),
+            "started_at": task.get("started_at"),
+            "updated_at": task.get("updated_at"),
+            "task_file": task.get("task_file"),
+            "result": result.get("result"),
+            "is_error": result.get("is_error"),
+            "duration_ms": result.get("duration_ms"),
+            "total_cost_usd": result.get("total_cost_usd"),
+        }.items()
+        if value is not None
+    }
+
+
 def status(args: argparse.Namespace) -> None:
     require_unsandboxed()
     state = read_state()
     tasks = list_tasks()
     state = sync_last_task(state, tasks)
-    output = {**state, "daemon": daemon_info(), "tasks": tasks}
+    output = {**state, "daemon": daemon_info(), "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks]}
     if args.include_workers:
         workers = []
         for path in sorted(WORKERS_DIR.glob("worker-*.json")):
@@ -489,6 +535,7 @@ def main() -> int:
     p = sub.add_parser("start")
     p.add_argument("--workdir", default=os.getcwd())
     p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--model", default="sonnet")
     p.add_argument("--clean-runtime", action="store_true")
     p.set_defaults(func=start)
 
@@ -500,6 +547,7 @@ def main() -> int:
 
     p = sub.add_parser("status")
     p.add_argument("--include-workers", action="store_true")
+    p.add_argument("--verbose", action="store_true")
     p.set_defaults(func=status)
 
     p = sub.add_parser("stop")
@@ -513,6 +561,7 @@ def main() -> int:
     p = sub.add_parser("daemon")
     p.add_argument("--workdir", required=True)
     p.add_argument("--workers", type=int, required=True)
+    p.add_argument("--model", required=True)
     p.set_defaults(func=daemon)
 
     args = parser.parse_args()
