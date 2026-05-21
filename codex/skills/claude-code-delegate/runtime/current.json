@@ -1,14 +1,8 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "last_task": {
-    "bg_id": "335431ef",
-    "id": "8b1576258da5f6b1-20260521132729",
-    "status": "removed",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/8b1576258da5f6b1-20260521132729/task.md"
-  },
   "mode": "background-agent",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T04:22:09Z",
+  "started_at": "2026-05-21T04:45:33Z",
   "status": "ready",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
   "workdir": "/Users/leegangho/sbe-web-v4"
