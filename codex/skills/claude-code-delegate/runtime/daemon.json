@@ -1,9 +1,9 @@
 {
   "mode": "sdk-worker-pool",
   "model": "sonnet",
-  "pid": 6210,
+  "pid": 25078,
   "status": "stopped",
-  "updated_at": "2026-05-21T05:37:48Z",
-  "workdir": "/private/tmp/claude-delegate-prod-fixture",
+  "updated_at": "2026-05-21T05:50:16Z",
+  "workdir": "/private/tmp/claude-delegate-large-fixture",
   "workers": 1
 }

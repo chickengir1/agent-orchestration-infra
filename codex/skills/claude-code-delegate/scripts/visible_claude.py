@@ -230,6 +230,7 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
     options = ClaudeAgentOptions(
         cwd=workdir,
         model=model,
+        tools=["Read", "Edit", "MultiEdit", "Write"],
         permission_mode="acceptEdits",
         allowed_tools=["Read", "Edit", "MultiEdit", "Write"],
         add_dirs=["/private/tmp"],
