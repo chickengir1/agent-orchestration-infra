@@ -1,18 +1,13 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "daemon_pid": 34690,
-  "last_task": {
-    "id": "8a5005893c208f64-20260521161043",
-    "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/8a5005893c208f64-20260521161043/task.md"
-  },
+  "daemon_pid": 70910,
   "mode": "sdk-worker-pool",
   "model": "opus",
   "queue_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/queue",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T07:02:12Z",
+  "started_at": "2026-05-21T07:21:49Z",
   "status": "ready",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
-  "workdir": "/private/tmp/claude-delegate-full-parallel-fixture-v2",
+  "workdir": "/private/tmp/claude-delegate-public-itsdangerous-wide",
   "workers": 3
 }

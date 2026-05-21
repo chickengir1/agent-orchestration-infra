@@ -54,8 +54,10 @@ Each task must have:
 - allowed write paths
 - forbidden files or directories
 - explicit dependency ids when it must wait for previous work
-- expected output
+- expected output, including exact values for non-obvious assertions
 - stop conditions
+
+Before dispatch, Codex must check that Required Changes and Acceptance Contract agree. If they disagree, fix the task contract first. Do not ask Claude to infer which side is correct through broad search.
 
 Do not ask Claude to run tests. Ask Claude to make the file changes only. Codex runs tests and validates diffs.
 
@@ -150,7 +152,7 @@ Task states:
 - `removed`: task record was removed from active consideration.
 - `dry-run`: task state was written without enqueueing Claude.
 
-Running task records also include the enforced session and budget fields:
+Running task records also include the enforced session and guard fields:
 
 - `session_policy`: `isolated-per-task`
 - `max_turns`
@@ -187,9 +189,11 @@ Do not treat Claude output as the source of truth for correctness. Use direct wo
 Do not ask Claude delegate workers to run tests or commands. Delegate workers are for file reads and file edits only; Codex handles command execution and verification.
 
 Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate work.
-The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
+The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a weaker-model fallback.
 
-The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled. It uses a `PreToolUse` hook to gate every tool call, including calls that Claude Code would otherwise auto-allow. Only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) are allowed within recorded read paths, and only edit tools (`Edit`, `MultiEdit`, `Write`) are allowed within recorded write paths. The hook also enforces the per-task tool budget and pre-edit read budget.
+The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled. It uses a `PreToolUse` hook to gate every tool call, including calls that Claude Code would otherwise auto-allow. Only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) are allowed within recorded read paths, and only edit tools (`Edit`, `MultiEdit`, `Write`) are allowed within recorded write paths. The hook also enforces the per-task tool-call and pre-edit read limits.
+
+Subscription/accounting details are not part of delegate orchestration decisions. Optimize for Opus quality, low reasoning overhead, bounded scope, and fast completion; do not choose weaker models or change task routing for accounting reasons.
 
 Do not reuse Claude conversation context across delegated tasks. Worker slots may persist, but SDK conversations are isolated per task.
 

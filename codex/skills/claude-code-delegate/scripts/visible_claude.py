@@ -44,6 +44,7 @@ Do not run shell commands, tests, package managers, servers, git, browsers, MCP,
 Read only the files needed for the task. Prefer the task file, target file, direct dependencies named in the task, and explicit acceptance files.
 Do not perform broad repository exploration.
 Make the requested edit promptly. Do not spend time on broad planning or hidden analysis.
+If the task instructions and acceptance contract conflict, do not resolve it by broad searching; stop and explain the conflict.
 If the task cannot be completed within the allowed paths, stop and explain why.
 End with a concise summary and the required TASK_DONE marker when the task is complete.
 """
@@ -74,9 +75,12 @@ TASK_TEMPLATE = """# Claude Delegate Task
 ## Acceptance Contract
 - What Codex will verify after completion.
 - Expected files/functions/exports.
+- Include exact expected values for non-obvious outputs.
+- If this conflicts with Required Changes, stop and report the conflict.
 
 ## Stop Conditions
 - Stop if required files are missing.
+- Stop if the task instructions and acceptance contract disagree.
 - Stop if the requested change requires editing outside allowed write paths.
 
 ## Final Response
@@ -375,11 +379,11 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
         task_id = str(active_task["id"])
         current_tool_count = task_tool_counts.get(task_id, 0)
         if current_tool_count >= MAX_TOOL_CALLS_PER_TASK:
-            return f"task tool budget exceeded ({MAX_TOOL_CALLS_PER_TASK})"
+            return f"task tool limit exceeded ({MAX_TOOL_CALLS_PER_TASK})"
         if tool_name in READ_ONLY_TOOLS and task_id not in task_write_seen:
             current_read_count = task_read_counts.get(task_id, 0)
             if current_read_count >= MAX_READ_CALLS_BEFORE_WRITE:
-                return f"pre-edit read budget exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
+                return f"pre-edit read limit exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
         file_path = tool_scope_path(tool_name, tool_input, workdir)
         if not file_path:
             return f"{tool_name} requires a file path"
@@ -746,10 +750,21 @@ def summarize_task(task: dict[str, Any]) -> dict[str, Any]:
             "result": result.get("result"),
             "is_error": result.get("is_error"),
             "duration_ms": result.get("duration_ms"),
-            "total_cost_usd": result.get("total_cost_usd"),
         }.items()
         if value is not None
     }
+
+
+def strip_accounting_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: strip_accounting_fields(item)
+            for key, item in value.items()
+            if key not in {"total_cost_usd", "model_usage", "usage"}
+        }
+    if isinstance(value, list):
+        return [strip_accounting_fields(item) for item in value]
+    return value
 
 
 def status(args: argparse.Namespace) -> None:
@@ -775,7 +790,7 @@ def status(args: argparse.Namespace) -> None:
         "runtime_status": runtime_status,
         "daemon_alive": daemon_alive,
         "daemon": daemon,
-        "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks],
+        "tasks": strip_accounting_fields(tasks) if args.verbose else [summarize_task(task) for task in tasks],
     }
     if args.include_workers:
         workers = []
