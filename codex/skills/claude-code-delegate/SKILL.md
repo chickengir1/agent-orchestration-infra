@@ -1,36 +1,54 @@
 ---
 name: claude-code-delegate
-description: Dispatch bounded work to Claude Code background agents, track state from Claude's local job files, inspect results, and clean up without using TUI input injection.
+description: Dispatch bounded work to a persistent Claude Agent SDK worker pool, track task files, inspect results, and clean up without TUI input injection or per-task Claude background sessions.
 ---
 
 # Claude Code Delegate
 
+## Requirements
+
+This skill is experimental and uses only the persistent SDK worker-pool path. There is no legacy `claude --bg` fallback.
+
+Required local runtime:
+
+- Claude Code CLI available as `claude`
+- Python 3.13 or compatible
+- Skill venv at `~/.codex/skills/claude-code-delegate/.venv`
+- `claude-agent-sdk` installed inside that venv
+
+Install or repair the SDK runtime with:
+
+```bash
+python3 -m venv ~/.codex/skills/claude-code-delegate/.venv
+~/.codex/skills/claude-code-delegate/.venv/bin/python -m pip install claude-agent-sdk
+```
+
+Do not run this skill inside the Codex sandbox. It controls local worker processes, runtime task files, and Claude Code SDK sessions.
+
 ## Operating Model
 
-Use Claude as a bounded background worker. Codex remains the orchestrator, reviewer, integrator, and verifier.
+Use Claude as a warm bounded background worker. Codex remains the orchestrator, reviewer, integrator, and verifier.
 
-For substantial changes, do not send one broad task. Split the work into bounded tasks with:
+`start` launches a local daemon. The daemon keeps one or more `ClaudeSDKClient` workers connected, so `send` only writes a task file and enqueues it. `send` returns immediately; completion is discovered later by explicit `status` checkpoints.
 
-- a narrow objective
+For substantial changes, do not send one broad task. Split work into bounded tasks with:
+
+- narrow objective
 - allowed files or directories
 - forbidden files or directories
 - whether file edits are allowed
 - expected output
 - stop conditions
 
-After dispatch, continue the Codex conversation or local work. Do not wait in `send`. Completion is discovered only at explicit `status` checkpoints.
-
-When a task reaches `done`, inspect the task result and verify the worktree directly before trusting it. Use `git status`, `git diff`, tests, and focused file inspection as appropriate. Clean up completed background jobs with `rm` after their results have been reviewed.
-
 Default large-change loop:
 
 1. Decompose the target into bounded Claude tasks.
 2. Dispatch each task with `send`.
 3. Continue local Codex work or discussion without waiting.
-4. Run `status --include-agents` at checkpoints.
-5. For `done` tasks, inspect and verify the produced artifacts.
+4. Run `status --include-workers` at checkpoints.
+5. For `done` tasks, inspect and verify artifacts directly.
 6. Integrate or correct the result.
-7. Stop or remove stale, failed, or completed jobs.
+7. Stop workers or remove reviewed task records when appropriate.
 
 Do not use Claude output as final verification. Claude may produce useful work, but Codex owns the final correctness decision.
 
@@ -42,15 +60,15 @@ Do not use Claude output as final verification. Claude may produce useful work, 
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py preflight --workdir "$(pwd)"
 ```
 
-This skill must not be operated inside the Codex sandbox. It manages local Claude background-agent state under `~/.claude/jobs` and runtime state under `~/.codex/skills/claude-code-delegate/runtime`. Preflight verifies unsandboxed execution, runtime write access, Claude Code availability, and `claude agents --json`.
+Preflight verifies unsandboxed execution, runtime write access, Claude Code availability, and the Python SDK runtime.
 
-2. Start the delegate runtime.
+2. Start the persistent worker pool.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)" --workers 1
 ```
 
-`start` does not open Terminal, iTerm, tmux, Remote Control, or a TUI. It records a ready runtime for background-agent delegation. Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
+Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
 
 3. Send a bounded task.
 
@@ -58,56 +76,46 @@ This skill must not be operated inside the Codex sandbox. It manages local Claud
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send "<prompt>"
 ```
 
-`send` normalizes escaped `\n`, writes the full task to `runtime/tasks/<task-id>/task.md`, then dispatches a short wrapper through:
-
-```bash
-claude --bg "<wrapper pointing at task.md>"
-```
-
-The returned short background id is stored in `runtime/tasks/<task-id>/status.json`. Duplicate prompts for the same workdir are not dispatched twice unless `--force-new` is passed.
-
-`send` must return immediately after dispatch. Do not wait for Claude completion in the send command. Codex remains available to continue the conversation or do local work, then checks completion later with `status`.
+`send` normalizes escaped `\n`, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
 
 4. Check status.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-agents
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-workers
 ```
 
-`status` refreshes tracked tasks from `~/.claude/jobs/<bg-id>/state.json`. That job `state.json` is the authoritative machine-readable source for completion. `claude logs <id>` is useful for human inspection, but it includes TUI/ANSI output and is not the primary state source.
+`status` reads runtime task files, daemon state, and worker state. It does not infer completion from terminal output.
 
 Task states:
 
 - `created`: task file and status file were written.
-- `dispatched`: `claude --bg` returned a background id.
-- `running`: the job exists but has not reached a terminal state.
-- `done`: `~/.claude/jobs/<id>/state.json` has `state: "done"`.
-- `failed`: dispatch or job state failed.
-- `stopped`: the background job was stopped.
-- `removed`: the background job was removed.
-- `dry-run`: task state was written without dispatching Claude.
+- `queued`: task is waiting for an SDK worker.
+- `running`: a worker has accepted the task.
+- `done`: SDK returned a non-error `ResultMessage`.
+- `failed`: SDK returned an error result or worker execution raised.
+- `stopped`: reserved for interrupted task support.
+- `removed`: task record was removed from active consideration.
+- `dry-run`: task state was written without enqueueing Claude.
 
 5. Inspect and verify.
 
-Codex inspects changed files, the task `status.json`, `~/.claude/jobs/<id>/state.json`, and, when useful, `timeline.jsonl` or `claude logs <id>`. Claude's result is not treated as verification by itself.
+Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Claude's result is not treated as verification by itself.
 
-6. Stop or remove tracked jobs when explicitly appropriate.
+6. Stop workers or remove task records when appropriate.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py rm "<task-id-or-bg-id>"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop --workers
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py rm "<task-id>"
 ```
-
-`stop` stops non-terminal tracked background jobs with `claude stop <id>`. `rm` removes Claude background sessions with `claude rm <id>`.
 
 ## Hard Rules
 
 Do not run this skill inside the Codex sandbox. Always establish the unsandboxed execution environment first with `preflight`.
 
-Do not inject work into Claude by writing to a PTY, FIFO, paste buffer, Remote Control, or TUI input line. Do not tune submit keys such as return, escape, or control sequences as a delivery mechanism.
+Do not inject work into Claude by writing to a PTY, FIFO, paste buffer, Remote Control, or TUI input line.
 
-Do not use `claude --resume --print` as a fallback for ordinary delegation. The primary and only task dispatch path is Claude Code background agents via `claude --bg`.
+Do not use `claude --bg` as the ordinary dispatch path. This experimental skill uses only the persistent Claude Agent SDK worker pool.
 
-Do not block the Codex conversation waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints that refresh `~/.claude/jobs/<id>/state.json`.
+Do not block the Codex conversation waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints.
 
-Do not treat `claude logs` as the source of truth for completion. Use `~/.claude/jobs/<id>/state.json`, then verify artifacts directly.
+Do not treat Claude output as the source of truth for correctness. Use direct worktree inspection and tests.
