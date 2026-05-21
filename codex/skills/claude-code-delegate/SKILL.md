@@ -31,6 +31,8 @@ Use Claude as a warm bounded background worker. Codex remains the orchestrator, 
 
 `start` launches a local daemon. The daemon keeps one or more `ClaudeSDKClient` workers connected, so `send` only writes a task file and enqueues it. `send` returns immediately; completion is discovered later by explicit `status` checkpoints.
 
+Claude workers are edit-only by default. They may read and modify files through `Read`, `Edit`, `MultiEdit`, and `Write`. They must not run tests, shell commands, package managers, servers, git commands, or browser automation. Codex performs all verification after Claude returns.
+
 For substantial changes, do not send one broad task. Split work into bounded tasks with:
 
 - narrow objective
@@ -40,13 +42,15 @@ For substantial changes, do not send one broad task. Split work into bounded tas
 - expected output
 - stop conditions
 
+Do not ask Claude to run tests. Ask Claude to make the file changes only. Codex runs tests and validates diffs.
+
 Default large-change loop:
 
 1. Decompose the target into bounded Claude tasks.
 2. Dispatch each task with `send`.
 3. Continue local Codex work or discussion without waiting.
 4. Run `status --include-workers` at checkpoints.
-5. For `done` tasks, inspect and verify artifacts directly.
+5. For `done` tasks, inspect and verify artifacts directly with Codex.
 6. Integrate or correct the result.
 7. Stop workers or remove reviewed task records when appropriate.
 
@@ -69,6 +73,7 @@ Preflight verifies unsandboxed execution, runtime write access, Claude Code avai
 ```
 
 Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
+`start --clean-runtime` is refused while an existing worker daemon is alive. Stop workers first.
 
 3. Send a bounded task.
 
@@ -85,6 +90,7 @@ Use `--clean-runtime` only when intentionally discarding the skill runtime's tra
 ```
 
 `status` reads runtime task files, daemon state, and worker state. It does not infer completion from terminal output. The default output is compact; use `--verbose` to include full SDK result payloads.
+If the daemon is dead while tasks are still `queued` or `running`, `status` marks those tasks `failed`.
 
 Task states:
 
@@ -99,7 +105,7 @@ Task states:
 
 5. Inspect and verify.
 
-Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Claude's result is not treated as verification by itself.
+Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Codex runs tests when appropriate. Claude's result is not treated as verification by itself.
 
 6. Stop workers or remove task records when appropriate.
 
@@ -107,6 +113,8 @@ Codex inspects changed files, task `status.json`, task `events.jsonl`, and direc
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop --workers
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py rm "<task-id>"
 ```
+
+`stop --workers` marks queued/running tasks as `stopped`, removes their queue items, and stops the daemon.
 
 ## Hard Rules
 
@@ -119,3 +127,5 @@ Do not use `claude --bg` as the ordinary dispatch path. This experimental skill 
 Do not block the Codex conversation waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints.
 
 Do not treat Claude output as the source of truth for correctness. Use direct worktree inspection and tests.
+
+Do not ask Claude delegate workers to run tests or commands. Delegate workers are for file reads and file edits only; Codex handles command execution and verification.

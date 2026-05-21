@@ -1,13 +1,18 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "daemon_pid": 93735,
+  "daemon_pid": 6210,
+  "last_task": {
+    "id": "8280a1e584cd6813-20260521143640",
+    "status": "done",
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/8280a1e584cd6813-20260521143640/task.md"
+  },
   "mode": "sdk-worker-pool",
   "model": "sonnet",
   "queue_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/queue",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T05:26:29Z",
+  "started_at": "2026-05-21T05:36:24Z",
   "status": "ready",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
-  "workdir": "/Users/leegangho/sbe-web-v4",
+  "workdir": "/private/tmp/claude-delegate-prod-fixture",
   "workers": 1
 }

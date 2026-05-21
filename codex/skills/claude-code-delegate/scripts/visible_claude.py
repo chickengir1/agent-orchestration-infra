@@ -231,6 +231,7 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
         cwd=workdir,
         model=model,
         permission_mode="acceptEdits",
+        allowed_tools=["Read", "Edit", "MultiEdit", "Write"],
         add_dirs=["/private/tmp"],
     )
     write_json(worker_file, {"id": worker_id, "status": "connecting", "updated_at": now_iso()})
@@ -335,12 +336,12 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
 
 def start(args: argparse.Namespace) -> None:
     preflight = run_preflight(args.workdir)
+    info = daemon_info()
+    if info and info.get("alive"):
+        raise SystemExit(f"delegate daemon already running pid={info['pid']}; stop workers before restarting or cleaning runtime")
     if args.clean_runtime:
         shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
         ensure_dirs()
-    info = daemon_info()
-    if info and info.get("alive"):
-        raise SystemExit(f"delegate daemon already running pid={info['pid']}")
     STOP_FILE.unlink(missing_ok=True)
     stdout_path = LOGS_DIR / "daemon.stdout.log"
     stderr_path = LOGS_DIR / "daemon.stderr.log"
@@ -473,9 +474,17 @@ def summarize_task(task: dict[str, Any]) -> dict[str, Any]:
 def status(args: argparse.Namespace) -> None:
     require_unsandboxed()
     state = read_state()
+    daemon = daemon_info()
     tasks = list_tasks()
+    if daemon and not daemon.get("alive"):
+        tasks = [
+            update_task(task, "failed", error="sdk worker daemon is not running")
+            if task.get("status") in {"queued", "running"}
+            else task
+            for task in tasks
+        ]
     state = sync_last_task(state, tasks)
-    output = {**state, "daemon": daemon_info(), "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks]}
+    output = {**state, "daemon": daemon, "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks]}
     if args.include_workers:
         workers = []
         for path in sorted(WORKERS_DIR.glob("worker-*.json")):
@@ -490,6 +499,10 @@ def status(args: argparse.Namespace) -> None:
 def stop(args: argparse.Namespace) -> None:
     require_unsandboxed()
     if args.workers:
+        for task in list_tasks():
+            if task.get("status") in {"queued", "running"}:
+                queue_item_path(task["id"]).unlink(missing_ok=True)
+                update_task(task, "stopped", stopped_at=now_iso(), stop_reason="worker pool stopped")
         STOP_FILE.write_text(now_iso() + "\n")
         info = daemon_info()
         if info and info.get("alive"):
