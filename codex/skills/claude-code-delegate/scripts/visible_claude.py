@@ -34,16 +34,21 @@ DEFAULT_THINKING_MODE = "disabled"
 DEFAULT_EFFORT = "low"
 MAX_TOOL_CALLS_PER_TASK = 16
 MAX_READ_CALLS_BEFORE_WRITE = 8
+MAX_DISCOVERY_CALLS_BEFORE_WRITE = 2
+MAX_POST_WRITE_READ_CALLS = 1
 READ_ONLY_TOOLS = {"Glob", "Grep", "LS", "Read"}
 WRITE_TOOLS = {"Edit", "MultiEdit", "Write"}
+DISCOVERY_TOOLS = {"Glob", "Grep", "LS"}
 DELEGATE_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 DELEGATE_SYSTEM_PROMPT = """You are a bounded file-edit worker controlled by Codex.
 
 Execute exactly one delegated task from its task file.
 Do not run shell commands, tests, package managers, servers, git, browsers, MCP, plugins, or subagents.
 Read only the files needed for the task. Prefer the task file, target file, direct dependencies named in the task, and explicit acceptance files.
-Do not perform broad repository exploration.
-Make the requested edit promptly. Do not spend time on broad planning or hidden analysis.
+Do not perform broad repository exploration. Use Glob, Grep, or LS only when the task explicitly requires discovery.
+Read target and dependency files first, then make the requested edit promptly.
+After editing, do not inspect broadly or read back repeatedly; finish with the TASK_DONE marker or stop with a concrete reason.
+Do not spend time on broad planning or hidden analysis.
 If the task instructions and acceptance contract conflict, do not resolve it by broad searching; stop and explain the conflict.
 If the task cannot be completed within the allowed paths, stop and explain why.
 End with a concise summary and the required TASK_DONE marker when the task is complete.
@@ -71,6 +76,12 @@ TASK_TEMPLATE = """# Claude Delegate Task
 ## Required Changes
 - Small bullet 1.
 - Small bullet 2.
+
+## Execution Rules
+- Read only the target file, direct dependencies, and the acceptance file.
+- Do not use Glob, Grep, or LS unless discovery is explicitly required.
+- After the first edit/write, do not perform broad inspection. Finish or stop.
+- Do not run commands or tests.
 
 ## Acceptance Contract
 - What Codex will verify after completion.
@@ -369,9 +380,11 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
     active_task: dict[str, Any] | None = None
     task_tool_counts: dict[str, int] = {}
     task_read_counts: dict[str, int] = {}
+    task_discovery_counts: dict[str, int] = {}
+    task_post_write_read_counts: dict[str, int] = {}
     task_write_seen: set[str] = set()
 
-    def validate_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str | None:
+    def validate_tool_call(tool_name: str, tool_input: dict[str, Any], *, count: bool) -> str | None:
         if tool_name not in DELEGATE_TOOLS:
             return f"{tool_name} is not allowed for claude-code-delegate workers"
         if active_task is None:
@@ -380,10 +393,21 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
         current_tool_count = task_tool_counts.get(task_id, 0)
         if current_tool_count >= MAX_TOOL_CALLS_PER_TASK:
             return f"task tool limit exceeded ({MAX_TOOL_CALLS_PER_TASK})"
+        write_seen = task_id in task_write_seen
+        if tool_name in DISCOVERY_TOOLS:
+            if write_seen:
+                return "post-edit discovery is denied; finish or dispatch a follow-up task"
+            current_discovery_count = task_discovery_counts.get(task_id, 0)
+            if current_discovery_count >= MAX_DISCOVERY_CALLS_BEFORE_WRITE:
+                return f"discovery tool limit exceeded ({MAX_DISCOVERY_CALLS_BEFORE_WRITE}); read explicit files or stop"
         if tool_name in READ_ONLY_TOOLS and task_id not in task_write_seen:
             current_read_count = task_read_counts.get(task_id, 0)
             if current_read_count >= MAX_READ_CALLS_BEFORE_WRITE:
                 return f"pre-edit read limit exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
+        if tool_name in READ_ONLY_TOOLS and write_seen:
+            current_post_write_read_count = task_post_write_read_counts.get(task_id, 0)
+            if current_post_write_read_count >= MAX_POST_WRITE_READ_CALLS:
+                return f"post-edit read limit exceeded ({MAX_POST_WRITE_READ_CALLS}); finish or dispatch a follow-up task"
         file_path = tool_scope_path(tool_name, tool_input, workdir)
         if not file_path:
             return f"{tool_name} requires a file path"
@@ -392,19 +416,25 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
             read_paths.extend(active_task.get("write_paths") or [])
             read_paths.append(str(active_task["task_file"]))
             if path_allowed(file_path, read_paths, workdir):
-                task_tool_counts[task_id] = current_tool_count + 1
-                task_read_counts[task_id] = task_read_counts.get(task_id, 0) + 1
+                if count:
+                    task_tool_counts[task_id] = current_tool_count + 1
+                    task_read_counts[task_id] = task_read_counts.get(task_id, 0) + 1
+                    if tool_name in DISCOVERY_TOOLS:
+                        task_discovery_counts[task_id] = task_discovery_counts.get(task_id, 0) + 1
+                    if write_seen:
+                        task_post_write_read_counts[task_id] = task_post_write_read_counts.get(task_id, 0) + 1
                 return None
             return f"{tool_name} path is outside delegated read scope: {file_path}"
         write_paths = list(active_task.get("write_paths") or [workdir])
         if path_allowed(file_path, write_paths, workdir):
-            task_tool_counts[task_id] = current_tool_count + 1
-            task_write_seen.add(task_id)
+            if count:
+                task_tool_counts[task_id] = current_tool_count + 1
+                task_write_seen.add(task_id)
             return None
         return f"{tool_name} path is outside delegated write scope: {file_path}"
 
     async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
-        denial = validate_tool_call(tool_name, tool_input)
+        denial = validate_tool_call(tool_name, tool_input, count=False)
         if denial:
             return PermissionResultDeny(message=denial)
         return PermissionResultAllow()
@@ -412,7 +442,7 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
     async def pre_tool_use_hook(hook_input: dict[str, Any], _tool_use_id: str | None, _context: dict[str, Any]) -> dict[str, Any]:
         tool_name = str(hook_input.get("tool_name") or "")
         tool_input = hook_input.get("tool_input") or {}
-        denial = validate_tool_call(tool_name, tool_input)
+        denial = validate_tool_call(tool_name, tool_input, count=True)
         if denial:
             return {
                 "hookSpecificOutput": {
@@ -440,6 +470,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
             active_task = task
             task_tool_counts[task_id] = 0
             task_read_counts[task_id] = 0
+            task_discovery_counts[task_id] = 0
+            task_post_write_read_counts[task_id] = 0
             task_write_seen.discard(task_id)
             task = update_task(
                 task,
@@ -452,6 +484,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 effort=DEFAULT_EFFORT,
                 max_tool_calls=MAX_TOOL_CALLS_PER_TASK,
                 max_read_calls_before_write=MAX_READ_CALLS_BEFORE_WRITE,
+                max_discovery_calls_before_write=MAX_DISCOVERY_CALLS_BEFORE_WRITE,
+                max_post_write_read_calls=MAX_POST_WRITE_READ_CALLS,
             )
             active_task = task
             write_json(worker_file, {"id": worker_id, "status": "running", "task_id": task_id, "updated_at": now_iso()})

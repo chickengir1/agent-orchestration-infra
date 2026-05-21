@@ -35,17 +35,19 @@ Each queued task runs in an isolated SDK conversation. The daemon stays warm, bu
 
 Claude workers are bounded edit workers. They may use read-only discovery tools inside recorded read paths and edit tools inside recorded write paths. They must not run tests, shell commands, package managers, servers, git commands, browser automation, MCP tools, or plugin tools. Codex performs all verification after Claude returns.
 
-Each task is also bounded by a tool/turn contract:
+Each task is also bounded by an edit contract:
 
 - `max_turns`: 12
 - `thinking`: disabled
 - `effort`: low
 - max tool calls per task: 16
 - max read-only tool calls before the first write: 8
+- max discovery calls (`Glob`, `Grep`, `LS`) before the first write: 2
+- max read-only calls after the first write: 1
 
 These are not wall-clock timeouts. They are task-contract guards. If Claude cannot make progress within the edit contract, the task should fail visibly instead of holding a worker indefinitely.
 
-For substantial changes, do not send one broad task. Split work into the smallest independently reviewable tasks. Prefer 3 parallel workers when tasks have disjoint write paths.
+For substantial changes, do not send one broad task. Split work into the smallest independently reviewable tasks. Prefer 3 parallel workers when tasks have disjoint write paths. If a task would need to edit source and tests across multiple modules, split it into source-slice and test-slice tasks.
 
 Each task must have:
 
@@ -61,17 +63,21 @@ Before dispatch, Codex must check that Required Changes and Acceptance Contract 
 
 Do not ask Claude to run tests. Ask Claude to make the file changes only. Codex runs tests and validates diffs.
 
+Claude should not be used as an open-ended explorer. Codex must do enough investigation to provide exact target files, direct dependency files, and acceptance files. Use directory read paths only for intentional discovery tasks; normal implementation tasks should use file-level read paths.
+
 Default large-change loop:
 
-1. Decompose the target into small tasks, each with disjoint write paths when possible.
-2. Start up to 3 workers.
-3. Dispatch independent tasks in parallel with `send`.
-4. Dispatch follow-up tasks with `--depends-on <task-id>` so they run only after dependencies are `done`.
-5. Continue local Codex work or discussion without waiting.
-6. Run `status --include-workers` at checkpoints.
-7. For `done` tasks, inspect and verify artifacts directly with Codex.
-8. Integrate or correct the result.
-9. Stop workers or remove reviewed task records when appropriate.
+1. Codex performs read-only investigation and identifies exact files.
+2. Codex decomposes the target into source slices, test slices, and integration slices. Each task should own one small write set.
+3. Start up to 3 workers.
+4. Dispatch independent tasks in parallel with `send`.
+5. Dispatch follow-up tasks with `--depends-on <task-id>` so they run only after dependencies are `done`.
+6. Continue local Codex work or discussion without waiting.
+7. Run `status --include-workers` at checkpoints.
+8. For `done` tasks, inspect and verify artifacts directly with Codex.
+9. For `failed` tasks, inspect events and split smaller; do not resend the same broad task.
+10. Integrate or correct the result.
+11. Stop workers or remove reviewed task records when appropriate.
 
 Do not use Claude output as final verification. Claude may produce useful work, but Codex owns the final correctness decision.
 
@@ -160,6 +166,8 @@ Running task records also include the enforced session and guard fields:
 - `effort`
 - `max_tool_calls`
 - `max_read_calls_before_write`
+- `max_discovery_calls_before_write`
+- `max_post_write_read_calls`
 
 6. Inspect and verify.
 
@@ -193,6 +201,8 @@ The script enforces this at `start` and daemon launch time. Treat a non-`opus` m
 
 The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled. It uses a `PreToolUse` hook to gate every tool call, including calls that Claude Code would otherwise auto-allow. Only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) are allowed within recorded read paths, and only edit tools (`Edit`, `MultiEdit`, `Write`) are allowed within recorded write paths. The hook also enforces the per-task tool-call and pre-edit read limits.
 
+Discovery is intentionally leashed. `Glob`, `Grep`, and `LS` are limited before the first write and denied after the first write. Read-back after the first edit is limited. If Claude needs more discovery after editing, that is a signal to stop and dispatch a smaller follow-up task with clearer file ownership.
+
 Subscription/accounting details are not part of delegate orchestration decisions. Optimize for Opus quality, low reasoning overhead, bounded scope, and fast completion; do not choose weaker models or change task routing for accounting reasons.
 
 Do not reuse Claude conversation context across delegated tasks. Worker slots may persist, but SDK conversations are isolated per task.
@@ -225,6 +235,12 @@ Every substantial Claude task file should follow this structure:
 ## Required Changes
 - Small bullet 1.
 - Small bullet 2.
+
+## Execution Rules
+- Read only the target file, direct dependencies, and the acceptance file.
+- Do not use Glob, Grep, or LS unless discovery is explicitly required.
+- After the first edit/write, do not perform broad inspection. Finish or stop.
+- Do not run commands or tests.
 
 ## Acceptance Contract
 - What Codex will verify after completion.
