@@ -1,6 +1,6 @@
 ---
 name: claude-code-delegate
-description: Dispatch bounded work to a persistent Claude Agent SDK worker pool, track task files, inspect results, and clean up without TUI input injection or per-task Claude background sessions.
+description: Dispatch bounded work to a persistent Claude Agent SDK worker daemon, track task files, inspect results, and clean up without TUI input injection or Claude background jobs.
 ---
 
 # Claude Code Delegate
@@ -27,11 +27,22 @@ Do not run this skill inside the Codex sandbox. It controls local worker process
 
 ## Operating Model
 
-Use Claude as a warm bounded background worker pool. Codex remains the orchestrator, reviewer, integrator, and verifier.
+Use Claude as a bounded background worker pool. Codex remains the orchestrator, reviewer, integrator, and verifier.
 
-`start` launches a local daemon. The daemon keeps one or more `ClaudeSDKClient` workers connected, so `send` only writes a task file and enqueues it. `send` returns immediately; completion is discovered later by explicit `status` checkpoints.
+`start` launches a local daemon with up to 3 worker slots. `send` only writes a task file and enqueues it, then returns immediately; completion is discovered later by explicit `status` checkpoints.
+
+Each queued task runs in an isolated SDK conversation. The daemon stays warm, but task context is not reused across tasks. This avoids stale session context, cross-task contamination, and long-running reasoning from one previous task affecting the next one.
 
 Claude workers are bounded edit workers. They may use read-only discovery tools inside recorded read paths and edit tools inside recorded write paths. They must not run tests, shell commands, package managers, servers, git commands, browser automation, MCP tools, or plugin tools. Codex performs all verification after Claude returns.
+
+Each task is also bounded by a tool/turn contract:
+
+- `max_turns`: 12
+- `max_thinking_tokens`: 4096
+- max tool calls per task: 16
+- max read-only tool calls before the first write: 6
+
+These are not wall-clock timeouts. They are task-contract guards. If Claude cannot make progress within the edit contract, the task should fail visibly instead of holding a worker indefinitely.
 
 For substantial changes, do not send one broad task. Split work into the smallest independently reviewable tasks. Prefer 3 parallel workers when tasks have disjoint write paths.
 
@@ -78,7 +89,7 @@ Preflight verifies unsandboxed execution, runtime write access, Claude Code avai
 ```
 
 Worker count is capped at 3. Use fewer only when write paths overlap or the task is inherently sequential.
-There is no per-task timeout. If a task is wrong, stale, or unsafe, Codex must stop the worker pool explicitly and inspect direct file evidence.
+There is no wall-clock per-task timeout. If a task is wrong, stale, or unsafe, Codex must stop the worker pool explicitly and inspect direct file evidence.
 Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
 `start --clean-runtime` is refused while an existing worker daemon is alive. Stop workers first.
 
@@ -138,6 +149,14 @@ Task states:
 - `removed`: task record was removed from active consideration.
 - `dry-run`: task state was written without enqueueing Claude.
 
+Running task records also include the enforced session and budget fields:
+
+- `session_policy`: `isolated-per-task`
+- `max_turns`
+- `max_thinking_tokens`
+- `max_tool_calls`
+- `max_read_calls_before_write`
+
 6. Inspect and verify.
 
 Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Codex runs tests when appropriate. Claude's result is not treated as verification by itself.
@@ -168,7 +187,9 @@ Do not ask Claude delegate workers to run tests or commands. Delegate workers ar
 Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate work.
 The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
 
-The SDK worker must be tool-isolated. It starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) within recorded read paths and edit tools (`Edit`, `MultiEdit`, `Write`) within recorded write paths.
+The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) within recorded read paths and edit tools (`Edit`, `MultiEdit`, `Write`) within recorded write paths. The callback also enforces the per-task tool budget and pre-edit read budget.
+
+Do not reuse Claude conversation context across delegated tasks. Worker slots may persist, but SDK conversations are isolated per task.
 
 ## Task Template Contract
 
