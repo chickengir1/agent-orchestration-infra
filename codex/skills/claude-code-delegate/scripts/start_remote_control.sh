@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-session_name="${1:-codex-delegate}"
+if [[ $# -ge 1 && -n "${1}" ]]; then
+  session_name="${1}"
+else
+  session_name="codex-delegate-$(date +%H%M%S)"
+fi
 workdir="${2:-$(pwd)}"
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 state_dir="${skill_dir}/state"
 state_file="${state_dir}/current.env"
 log_file="${state_dir}/${session_name}.log"
+ui_url="https://claude.ai/code"
 
 mkdir -p "${state_dir}"
 
@@ -40,7 +45,7 @@ claude remote-control \
 
 pid="$!"
 
-url=""
+launch_url=""
 for _ in $(seq 1 80); do
   if ! kill -0 "${pid}" 2>/dev/null; then
     echo "claude-code-delegate: remote-control exited before becoming ready" >&2
@@ -48,15 +53,15 @@ for _ in $(seq 1 80); do
     exit 3
   fi
 
-  url="$(grep -Eo 'https://claude\.ai/code[^[:space:]]+' "${log_file}" | tail -n 1 || true)"
-  if [[ -n "${url}" ]]; then
+  launch_url="$(grep -Eo 'https://claude\.ai/code[^[:space:]]+' "${log_file}" | tail -n 1 || true)"
+  if [[ -n "${launch_url}" ]]; then
     break
   fi
 
   sleep 0.25
 done
 
-if [[ -z "${url}" ]]; then
+if [[ -z "${launch_url}" ]]; then
   echo "claude-code-delegate: remote-control did not publish a URL" >&2
   cat "${log_file}" >&2
   kill "${pid}" 2>/dev/null || true
@@ -67,17 +72,17 @@ cat > "${state_file}" <<EOF
 SESSION_NAME=${session_name}
 PID=${pid}
 WORKDIR=${workdir}
-URL=${url}
+UI_URL=${ui_url}
+LAUNCH_URL=${launch_url}
 LOG_FILE=${log_file}
 PERMISSION_MODE=auto
 STATUS=ready
 EOF
 
-open "${url}"
+open "${launch_url}"
 
 echo "Claude Remote Control ready"
-echo "session=${session_name}"
+echo "select_session=${session_name}"
 echo "pid=${pid}"
-echo "url=${url}"
+echo "ui=${ui_url}"
 echo "state=${state_file}"
-echo "log=${log_file}"

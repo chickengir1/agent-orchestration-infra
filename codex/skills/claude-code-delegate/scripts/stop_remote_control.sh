@@ -12,6 +12,8 @@ fi
 # shellcheck disable=SC1090
 source "${state_file}"
 
+log_file="${LOG_FILE:-}"
+
 if [[ -n "${PID:-}" ]] && kill -0 "${PID}" 2>/dev/null; then
   kill "${PID}" 2>/dev/null || true
   sleep 1
@@ -20,10 +22,12 @@ if [[ -n "${PID:-}" ]] && kill -0 "${PID}" 2>/dev/null; then
   fi
 fi
 
-tmp_file="${state_file}.tmp"
-grep -v '^STATUS=' "${state_file}" > "${tmp_file}" || true
-printf 'STATUS=stopped\n' >> "${tmp_file}"
-mv "${tmp_file}" "${state_file}"
+rm -f "${state_file}"
+if [[ -n "${log_file}" ]]; then
+  rm -f "${log_file}"
+fi
+
+rmdir "${skill_dir}/state" 2>/dev/null || true
 
 echo "Claude Remote Control stopped"
 echo "session=${SESSION_NAME:-unknown}"
