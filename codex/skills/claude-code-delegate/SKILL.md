@@ -37,11 +37,11 @@ Claude workers are bounded edit workers. They may use read-only discovery tools 
 
 Each task is also bounded by a tool/turn contract:
 
-- `max_turns`: 8
+- `max_turns`: 12
 - `thinking`: disabled
 - `effort`: low
 - max tool calls per task: 16
-- max read-only tool calls before the first write: 6
+- max read-only tool calls before the first write: 8
 
 These are not wall-clock timeouts. They are task-contract guards. If Claude cannot make progress within the edit contract, the task should fail visibly instead of holding a worker indefinitely.
 
