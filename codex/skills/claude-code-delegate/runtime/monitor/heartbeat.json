@@ -1,14 +1,14 @@
 {
-  "checked_at": "2026-05-21T08:41:12Z",
+  "checked_at": "2026-05-21T08:51:56Z",
   "daemon_alive": true,
   "daemon_pid": 68227,
   "daemon_status": "running",
-  "done_tasks": 4,
+  "done_tasks": 6,
   "failed_tasks": 0,
   "last_task": {
-    "id": "695e88c383048f6d",
+    "id": "9ccc0d09397feaea",
     "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/695e88c383048f6d/task.md"
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/9ccc0d09397feaea/task.md"
   },
   "model": "opus",
   "queued_task_ids": [],
@@ -22,12 +22,12 @@
     {
       "id": 1,
       "status": "idle",
-      "updated_at": "2026-05-21T08:19:47Z"
+      "updated_at": "2026-05-21T08:48:55Z"
     },
     {
       "id": 2,
       "status": "idle",
-      "updated_at": "2026-05-21T08:36:49Z"
+      "updated_at": "2026-05-21T08:49:54Z"
     },
     {
       "id": 3,

@@ -2,9 +2,9 @@
   "claude_version": "2.1.146 (Claude Code)",
   "daemon_pid": 68227,
   "last_task": {
-    "id": "695e88c383048f6d",
+    "id": "9ccc0d09397feaea",
     "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/695e88c383048f6d/task.md"
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/9ccc0d09397feaea/task.md"
   },
   "mode": "sdk-worker-pool",
   "model": "opus",
