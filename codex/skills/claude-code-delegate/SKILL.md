@@ -63,7 +63,20 @@ Task states:
 
 Codex inspects changed files, the task `status.json`, `~/.claude/jobs/<id>/state.json`, and, when useful, `timeline.jsonl` or `claude logs <id>`. Claude's result is not treated as verification by itself.
 
-6. Stop or remove tracked jobs when explicitly appropriate.
+6. Optionally export a static task view after a terminal result.
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py export-view "<task-id-or-bg-id>"
+```
+
+`export-view` is a final observation layer, not part of dispatch. It only runs after a task reaches a terminal state such as `done`, `failed`, `timeout`, `stopped`, `dispatch_failed`, or `removed`. It writes:
+
+- `runtime/views/<task-id>/index.html`
+- `runtime/views/<task-id>/data.json`
+
+The view reads the task `status.json`, cached or live `~/.claude/jobs/<id>/state.json`, available `timeline.jsonl`, and available transcript JSONL from `linkScanPath`. It is a static artifact for review; it does not start a browser, terminal UI, watcher, server, or live polling process.
+
+7. Stop or remove tracked jobs when explicitly appropriate.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop
