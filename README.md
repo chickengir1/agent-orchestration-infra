@@ -118,6 +118,43 @@ launchctl load ~/Library/LaunchAgents/com.chickengir1.agent-orchestration-infra-
 
 자동화는 10분마다 실행됩니다. diff가 없으면 커밋하지 않습니다. diff가 있으면 `Sync local agent orchestration infra (...)` 메시지로 커밋하고 push합니다.
 
+## Claude Delegate Watcher
+
+`scripts/claude-delegate-watch.py`는 Codex 전역 `claude-code-delegate` worker daemon 상태를 감시하는 macOS launchd용 watcher입니다.
+
+이 watcher는 Claude나 Codex 작업을 자동 재시작하거나 재전송하지 않습니다. OS 레벨에서 주기적으로 상태만 관찰하고, heartbeat/event 파일을 남깁니다.
+
+기록 위치:
+
+```text
+~/.codex/skills/claude-code-delegate/runtime/monitor/heartbeat.json
+~/.codex/skills/claude-code-delegate/runtime/monitor/events.jsonl
+~/.codex/skills/claude-code-delegate/runtime/monitor/launchd.stdout.log
+~/.codex/skills/claude-code-delegate/runtime/monitor/launchd.stderr.log
+```
+
+설치:
+
+```bash
+mkdir -p ~/.codex/bin ~/Library/LaunchAgents
+cp scripts/claude-delegate-watch.py ~/.codex/bin/claude-delegate-watch
+chmod 755 ~/.codex/bin/claude-delegate-watch
+cp automation/com.leegangho.codex.claude-delegate-watch.plist ~/Library/LaunchAgents/
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.leegangho.codex.claude-delegate-watch.plist 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.leegangho.codex.claude-delegate-watch.plist
+launchctl kickstart -k gui/$(id -u)/com.leegangho.codex.claude-delegate-watch
+```
+
+검증:
+
+```bash
+~/.codex/bin/claude-delegate-watch
+cat ~/.codex/skills/claude-code-delegate/runtime/monitor/heartbeat.json
+launchctl print gui/$(id -u)/com.leegangho.codex.claude-delegate-watch
+```
+
+LaunchAgent는 60초마다 실행됩니다. `daemon_alive`, `runtime_status`, task count, running/queued task ids를 heartbeat에 기록합니다.
+
 Codex:
 
 - `fundamental-reviewer`
