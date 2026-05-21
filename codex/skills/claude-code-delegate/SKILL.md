@@ -37,8 +37,9 @@ Claude workers are bounded edit workers. They may use read-only discovery tools 
 
 Each task is also bounded by a tool/turn contract:
 
-- `max_turns`: 12
-- `max_thinking_tokens`: 4096
+- `max_turns`: 8
+- `thinking`: disabled
+- `effort`: low
 - max tool calls per task: 16
 - max read-only tool calls before the first write: 6
 
@@ -124,7 +125,7 @@ For dependent follow-up work:
 ```
 
 `send` normalizes escaped `\n` for inline prompts, reads `--prompt-file` directly for long tasks, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Queue order is recorded with a nanosecond monotonic-ish enqueue key. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
-Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. The worker denies tool calls outside the recorded paths.
+Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. Prefer file-level read paths: target file, direct dependency files, and the specific acceptance/test file Codex will later run. Do not pass broad source directories unless the task truly requires discovery. Write paths are automatically readable, so the target file does not need to be duplicated as a read path. The worker denies tool calls outside the recorded paths.
 Use `--depends-on` to connect tasks. A dependent task stays queued until every dependency is `done`. If any dependency reaches a terminal non-`done` state or is missing, the dependent task becomes `failed`; it is not retried or auto-rerouted.
 After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
 
@@ -153,7 +154,8 @@ Running task records also include the enforced session and budget fields:
 
 - `session_policy`: `isolated-per-task`
 - `max_turns`
-- `max_thinking_tokens`
+- `thinking`
+- `effort`
 - `max_tool_calls`
 - `max_read_calls_before_write`
 
@@ -187,7 +189,7 @@ Do not ask Claude delegate workers to run tests or commands. Delegate workers ar
 Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate work.
 The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
 
-The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) within recorded read paths and edit tools (`Edit`, `MultiEdit`, `Write`) within recorded write paths. The callback also enforces the per-task tool budget and pre-edit read budget.
+The SDK worker must be tool-isolated. Each task starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled. It uses a `PreToolUse` hook to gate every tool call, including calls that Claude Code would otherwise auto-allow. Only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) are allowed within recorded read paths, and only edit tools (`Edit`, `MultiEdit`, `Write`) are allowed within recorded write paths. The hook also enforces the per-task tool budget and pre-edit read budget.
 
 Do not reuse Claude conversation context across delegated tasks. Worker slots may persist, but SDK conversations are isolated per task.
 

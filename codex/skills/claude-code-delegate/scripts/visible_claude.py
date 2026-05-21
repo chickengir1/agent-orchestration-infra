@@ -29,8 +29,9 @@ LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 DEFAULT_MODEL = "opus"
 MAX_WORKERS = 3
-DEFAULT_MAX_TURNS = 12
-DEFAULT_MAX_THINKING_TOKENS = 4096
+DEFAULT_MAX_TURNS = 8
+DEFAULT_THINKING_MODE = "disabled"
+DEFAULT_EFFORT = "low"
 MAX_TOOL_CALLS_PER_TASK = 16
 MAX_READ_CALLS_BEFORE_WRITE = 6
 READ_ONLY_TOOLS = {"Glob", "Grep", "LS", "Read"}
@@ -42,7 +43,8 @@ Execute exactly one delegated task from its task file.
 Do not run shell commands, tests, package managers, servers, git, browsers, MCP, plugins, or subagents.
 Read only the files needed for the task. Prefer the task file, target file, direct dependencies named in the task, and explicit acceptance files.
 Do not perform broad repository exploration.
-Make the requested edit promptly. If the task cannot be completed within the allowed paths, stop and explain why.
+Make the requested edit promptly. Do not spend time on broad planning or hidden analysis.
+If the task cannot be completed within the allowed paths, stop and explain why.
 End with a concise summary and the required TASK_DONE marker when the task is complete.
 """
 TASK_TEMPLATE = """# Claude Delegate Task
@@ -356,7 +358,7 @@ def dispatch_prompt(task: dict[str, Any]) -> str:
 
 
 async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
-    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
+    from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
     from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
     worker_file = WORKERS_DIR / f"worker-{worker_id}.json"
@@ -365,38 +367,62 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
     task_read_counts: dict[str, int] = {}
     task_write_seen: set[str] = set()
 
-    async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+    def validate_tool_call(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         if tool_name not in DELEGATE_TOOLS:
-            return PermissionResultDeny(message=f"{tool_name} is not allowed for claude-code-delegate workers")
+            return f"{tool_name} is not allowed for claude-code-delegate workers"
         if active_task is None:
-            return PermissionResultDeny(message="no active delegated task")
+            return "no active delegated task"
         task_id = str(active_task["id"])
         current_tool_count = task_tool_counts.get(task_id, 0)
         if current_tool_count >= MAX_TOOL_CALLS_PER_TASK:
-            return PermissionResultDeny(message=f"task tool budget exceeded ({MAX_TOOL_CALLS_PER_TASK})")
+            return f"task tool budget exceeded ({MAX_TOOL_CALLS_PER_TASK})"
         if tool_name in READ_ONLY_TOOLS and task_id not in task_write_seen:
             current_read_count = task_read_counts.get(task_id, 0)
             if current_read_count >= MAX_READ_CALLS_BEFORE_WRITE:
-                return PermissionResultDeny(
-                    message=f"pre-edit read budget exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
-                )
+                return f"pre-edit read budget exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
         file_path = tool_scope_path(tool_name, tool_input, workdir)
         if not file_path:
-            return PermissionResultDeny(message=f"{tool_name} requires a file path")
+            return f"{tool_name} requires a file path"
         if tool_name in READ_ONLY_TOOLS:
             read_paths = list(active_task.get("read_paths") or [workdir])
+            read_paths.extend(active_task.get("write_paths") or [])
             read_paths.append(str(active_task["task_file"]))
             if path_allowed(file_path, read_paths, workdir):
                 task_tool_counts[task_id] = current_tool_count + 1
                 task_read_counts[task_id] = task_read_counts.get(task_id, 0) + 1
-                return PermissionResultAllow()
-            return PermissionResultDeny(message=f"{tool_name} path is outside delegated read scope: {file_path}")
+                return None
+            return f"{tool_name} path is outside delegated read scope: {file_path}"
         write_paths = list(active_task.get("write_paths") or [workdir])
         if path_allowed(file_path, write_paths, workdir):
             task_tool_counts[task_id] = current_tool_count + 1
             task_write_seen.add(task_id)
-            return PermissionResultAllow()
-        return PermissionResultDeny(message=f"{tool_name} path is outside delegated write scope: {file_path}")
+            return None
+        return f"{tool_name} path is outside delegated write scope: {file_path}"
+
+    async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+        denial = validate_tool_call(tool_name, tool_input)
+        if denial:
+            return PermissionResultDeny(message=denial)
+        return PermissionResultAllow()
+
+    async def pre_tool_use_hook(hook_input: dict[str, Any], _tool_use_id: str | None, _context: dict[str, Any]) -> dict[str, Any]:
+        tool_name = str(hook_input.get("tool_name") or "")
+        tool_input = hook_input.get("tool_input") or {}
+        denial = validate_tool_call(tool_name, tool_input)
+        if denial:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": denial,
+                }
+            }
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            }
+        }
 
     write_json(worker_file, {"id": worker_id, "status": "connecting", "updated_at": now_iso()})
     write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
@@ -418,7 +444,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 started_at=now_iso(),
                 session_policy="isolated-per-task",
                 max_turns=DEFAULT_MAX_TURNS,
-                max_thinking_tokens=DEFAULT_MAX_THINKING_TOKENS,
+                thinking=DEFAULT_THINKING_MODE,
+                effort=DEFAULT_EFFORT,
                 max_tool_calls=MAX_TOOL_CALLS_PER_TASK,
                 max_read_calls_before_write=MAX_READ_CALLS_BEFORE_WRITE,
             )
@@ -432,6 +459,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 permission_mode="acceptEdits",
                 allowed_tools=sorted(DELEGATE_TOOLS),
                 can_use_tool=can_use_tool,
+                hooks={"PreToolUse": [HookMatcher(hooks=[pre_tool_use_hook], timeout=5)]},
+                include_hook_events=True,
                 mcp_servers={},
                 strict_mcp_config=True,
                 plugins=[],
@@ -441,7 +470,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 add_dirs=["/private/tmp"],
                 continue_conversation=False,
                 max_turns=DEFAULT_MAX_TURNS,
-                max_thinking_tokens=DEFAULT_MAX_THINKING_TOKENS,
+                thinking={"type": DEFAULT_THINKING_MODE},
+                effort=DEFAULT_EFFORT,
             )
             async with ClaudeSDKClient(options=options) as client:
                 await client.query(dispatch_prompt(task))
