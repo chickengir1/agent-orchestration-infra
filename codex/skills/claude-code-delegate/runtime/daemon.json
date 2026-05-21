@@ -1,11 +1,10 @@
 {
-  "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
-  "pid": 88574,
-  "started_at": "2026-05-21T07:31:21Z",
-  "status": "stopped",
-  "updated_at": "2026-05-21T07:31:49Z",
-  "workdir": "/private/tmp/claude-delegate-leash-smoke",
-  "workers": 1
+  "pid": 6435,
+  "started_at": "2026-05-21T07:41:16Z",
+  "status": "running",
+  "updated_at": "2026-05-21T07:41:16Z",
+  "workdir": "/private/tmp/claude-delegate-complex-check",
+  "workers": 3
 }

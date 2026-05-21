@@ -1,20 +1,18 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "daemon_alive": false,
-  "daemon_pid": 88574,
+  "daemon_pid": 6435,
   "last_task": {
-    "id": "dbb5b10c855cface",
-    "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/dbb5b10c855cface/task.md"
+    "id": "4e91b130d87e7c31",
+    "status": "running",
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/4e91b130d87e7c31/task.md"
   },
   "mode": "sdk-worker-pool",
   "model": "opus",
   "queue_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/queue",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T07:31:21Z",
-  "status": "stopped",
-  "stopped_at": "2026-05-21T07:31:49Z",
+  "started_at": "2026-05-21T07:41:16Z",
+  "status": "ready",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
-  "workdir": "/private/tmp/claude-delegate-leash-smoke",
-  "workers": 1
+  "workdir": "/private/tmp/claude-delegate-complex-check",
+  "workers": 3
 }
