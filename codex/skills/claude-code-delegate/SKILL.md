@@ -1,67 +1,36 @@
 ---
 name: claude-code-delegate
-description: Start a visible Claude Code Remote Control session, use the session name in claude.ai/code, inspect the result, and stop the session when done.
+description: Start a visible Claude Code Terminal session, send prompts into that same session, let the user watch Claude work, inspect the result, and stop/delete runtime state afterward.
 ---
 
 # Claude Code Delegate
 
 ## Procedure
 
-1. Start Claude Remote Control from the target repo:
+1. Start a visible Claude Code session.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/start_remote_control.sh "<session-name>" "$(pwd)"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --name "<session-name>" --workdir "$(pwd)"
 ```
 
-Use a recognizable session name, for example:
+2. Send prompts into that same visible session.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/start_remote_control.sh "codex-sbe-web-v4" "$(pwd)"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send "<prompt>"
 ```
 
-The browser opens:
+3. The user watches the Terminal window where Claude Code is running.
 
-```text
-https://claude.ai/code
-```
+4. Codex inspects changed files and runs verification.
 
-and writes temporary runtime state to:
-
-```text
-~/.codex/skills/claude-code-delegate/state/current.env
-```
-
-2. In `https://claude.ai/code`, select the session name printed as `select_session=...`.
-
-3. Send the task prompt in that selected Remote Control session.
-
-Prompt template:
-
-```md
-Task:
-
-Allowed files:
-
-Forbidden files:
-
-Expected output:
-- Changed files
-- Summary
-- Validation
-```
-
-4. After Claude finishes, inspect the changed files and run the needed verification.
-
-5. Stop the Remote Control session:
+5. Stop the visible session and delete runtime state/logs.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/stop_remote_control.sh
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop
 ```
 
-## Commands
+## Status
 
 ```bash
-cat ~/.codex/skills/claude-code-delegate/state/current.env
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status
 ```
-
-Use this while the session is running. The stop script deletes this runtime state.

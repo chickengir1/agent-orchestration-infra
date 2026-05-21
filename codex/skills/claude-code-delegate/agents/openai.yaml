@@ -1,4 +1,4 @@
 interface:
   display_name: "Claude Code Delegate"
-  short_description: "Delegate work to visible Claude Code Remote Control sessions."
-  default_prompt: "Prepare a bounded worker prompt, start Claude Code through Remote Control with permission mode auto, then inspect and verify the result."
+  short_description: "Send prompts into a visible Claude Code Terminal worker."
+  default_prompt: "Start a visible Claude Code worker, send the bounded prompt into that same session, then inspect and verify the result."
