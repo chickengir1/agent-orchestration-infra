@@ -1,11 +1,15 @@
 {
-  "channel": {
-    "http_port": 56223,
-    "http_ready": true,
-    "http_url": "http://127.0.0.1:56223",
-    "server_exited_at": "2026-05-21T04:17:08Z",
-    "server_pid": 78767,
-    "server_started_at": "2026-05-21T04:16:38Z",
-    "updated_at": "2026-05-21T04:17:08Z"
-  }
+  "claude_version": "2.1.146 (Claude Code)",
+  "last_task": {
+    "bg_id": "5a7ded06",
+    "id": "0a41b1aeb01d8358",
+    "status": "removed",
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/0a41b1aeb01d8358/task.md"
+  },
+  "mode": "background-agent",
+  "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
+  "started_at": "2026-05-21T04:22:09Z",
+  "status": "ready",
+  "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
+  "workdir": "/Users/leegangho/sbe-web-v4"
 }

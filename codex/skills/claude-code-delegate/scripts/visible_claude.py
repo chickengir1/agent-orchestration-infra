@@ -5,106 +5,27 @@ import argparse
 import hashlib
 import json
 import os
-import pty
 import re
-import select
-import secrets
-import signal
 import shutil
-import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib import error, request
+from typing import Any
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = SKILL_DIR / "runtime"
 STATE_FILE = RUNTIME_DIR / "current.json"
-LOG_FILE = RUNTIME_DIR / "session.log"
-CTRL_LOG_FILE = RUNTIME_DIR / "controller.log"
 TASKS_DIR = RUNTIME_DIR / "tasks"
-MCP_CONFIG_FILE = RUNTIME_DIR / "mcp.json"
-CHANNEL_SERVER = SKILL_DIR / "scripts" / "channel_server.py"
-CHANNEL_NAME = "codex_delegate_channel"
-CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
-ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-REMOTE_URL_RE = re.compile(r"https://claude\.ai/(?:code|cod)/session_[A-Za-z0-9]+")
-SESSION_ID_RE = re.compile(r"session_[A-Za-z0-9]+")
-CLAUDE_SESSION_ID_RE = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
-DEV_CHANNEL_CONFIRM_TEXT = "iamusingthisforlocaldevelopment"
-DEV_CHANNEL_CONFIRM_HINT = "entertoconfirm"
-
-
-def strip_ansi(text: str) -> str:
-    return ANSI_RE.sub("", text)
-
-
-def normalize_remote_url(url: str) -> str:
-    return url.replace("https://claude.ai/cod/", "https://claude.ai/code/")
-
-
-def extract_remote_url(text: str) -> str | None:
-    compact = re.sub(r"\s+", "", text)
-    match = REMOTE_URL_RE.search(compact)
-    if match:
-        return normalize_remote_url(match.group(0))
-    session_match = SESSION_ID_RE.search(compact)
-    if session_match and "claude" in compact and "code" in compact:
-        return f"https://claude.ai/code/{session_match.group(0)}"
-    return None
-
-
-def normalize_prompt_arg(prompt: str) -> str:
-    return prompt.replace("\\n", "\n").rstrip("\n")
+CLAUDE_DIR = Path.home() / ".claude"
+CLAUDE_JOBS_DIR = CLAUDE_DIR / "jobs"
+BG_ID_RE = re.compile(r"backgrounded\s+.\s+([A-Za-z0-9_-]+)")
+TERMINAL_TASK_STATES = {"done", "failed", "stopped", "dispatch_failed", "removed"}
 
 
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def write_state(state: dict) -> None:
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
-
-
-def read_state() -> dict:
-    if not STATE_FILE.exists():
-        raise SystemExit("no active Claude Code session")
-    return json.loads(STATE_FILE.read_text())
-
-
-def process_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def cleanup_runtime() -> None:
-    if RUNTIME_DIR.exists():
-        for path in RUNTIME_DIR.iterdir():
-            if path.is_file() or path.is_fifo():
-                path.unlink()
-            elif path.is_dir():
-                shutil.rmtree(path)
-        try:
-            RUNTIME_DIR.rmdir()
-        except OSError:
-            pass
-
-
-def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-
-
-def read_json(path: Path) -> dict:
-    return json.loads(path.read_text())
 
 
 def sandbox_detected() -> bool:
@@ -115,161 +36,90 @@ def require_unsandboxed() -> None:
     if sandbox_detected():
         raise SystemExit(
             "claude-code-delegate must run outside the Codex sandbox. "
-            "Re-run this command with escalated/unsandboxed execution before touching local ports or runtime processes."
+            "Re-run this command with escalated/unsandboxed execution before managing Claude background agents."
         )
 
 
-def run_preflight() -> dict:
-    checks: dict[str, object] = {
-        "timestamp": now_iso(),
-        "unsandboxed": not sandbox_detected(),
-        "python": sys.executable,
-        "runtime_dir": str(RUNTIME_DIR),
-        "channel_server": str(CHANNEL_SERVER),
-    }
+def normalize_prompt_arg(prompt: str) -> str:
+    return prompt.replace("\\n", "\n").rstrip("\n")
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text())
+
+
+def write_state(state: dict[str, Any]) -> None:
+    write_json(STATE_FILE, state)
+
+
+def read_state() -> dict[str, Any]:
+    if not STATE_FILE.exists():
+        raise SystemExit("no active Claude Code delegate runtime; run start first")
+    return read_json(STATE_FILE)
+
+
+def run_command(args: list[str], cwd: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def claude_version(cwd: str) -> str:
+    proc = run_command(["claude", "--version"], cwd=cwd, timeout=10)
+    if proc.returncode != 0:
+        raise SystemExit(f"claude --version failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    return proc.stdout.strip()
+
+
+def agents_json(cwd: str) -> list[dict[str, Any]]:
+    proc = run_command(["claude", "agents", "--json"], cwd=cwd, timeout=15)
+    if proc.returncode != 0:
+        raise SystemExit(f"claude agents --json failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"claude agents --json returned invalid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise SystemExit("claude agents --json returned non-list JSON")
+    return data
+
+
+def run_preflight(cwd: str) -> dict[str, Any]:
     require_unsandboxed()
-    if not CHANNEL_SERVER.exists():
-        raise SystemExit(f"channel server missing: {CHANNEL_SERVER}")
-
-    compile(CHANNEL_SERVER.read_text(), str(CHANNEL_SERVER), "exec")
-    checks["channel_server_syntax"] = "ok"
-
+    checks: dict[str, Any] = {
+        "timestamp": now_iso(),
+        "unsandboxed": True,
+        "runtime_dir": str(RUNTIME_DIR),
+        "jobs_dir": str(CLAUDE_JOBS_DIR),
+        "workdir": cwd,
+    }
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
     probe = RUNTIME_DIR / ".preflight-write"
     probe.write_text(now_iso() + "\n")
     probe.unlink()
     checks["runtime_write"] = "ok"
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        checks["localhost_bind"] = sock.getsockname()[1]
+    CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
+    jobs_probe_dir = CLAUDE_JOBS_DIR
+    jobs_probe_dir.mkdir(parents=True, exist_ok=True)
+    checks["jobs_dir_write"] = "ok"
 
-    proc = subprocess.run(
-        ["claude", "--version"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=10,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise SystemExit(f"claude --version failed: {proc.stderr.strip()}")
-    checks["claude_version"] = proc.stdout.strip()
+    checks["claude_version"] = claude_version(cwd)
+    checks["agents"] = agents_json(cwd)
     checks["status"] = "ok"
     return checks
-
-
-def write_mcp_config(token: str) -> None:
-    write_json(MCP_CONFIG_FILE, {"mcpServers": {CHANNEL_NAME: channel_server_spec(token)}})
-
-
-def channel_server_spec(token: str) -> dict:
-    return {
-        "command": sys.executable,
-        "args": [
-            str(CHANNEL_SERVER),
-            "--runtime-dir",
-            str(RUNTIME_DIR),
-            "--token",
-            token,
-        ],
-    }
-
-
-def register_local_mcp_config(token: str, workdir: str) -> None:
-    spec = json.dumps(channel_server_spec(token), separators=(",", ":"))
-    subprocess.run(
-        ["claude", "mcp", "remove", "--scope", "local", CHANNEL_NAME],
-        cwd=workdir,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    proc = subprocess.run(
-        ["claude", "mcp", "add-json", "--scope", "local", CHANNEL_NAME, spec],
-        cwd=workdir,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise SystemExit(f"failed to register local MCP channel server: {proc.stderr.strip() or proc.stdout.strip()}")
-
-
-def encoded_project_dir(workdir: str) -> Path:
-    return CLAUDE_PROJECTS_DIR / workdir.replace("/", "-")
-
-
-def tail_text(path: Path, limit: int = 2_000_000) -> str:
-    with path.open("rb") as f:
-        try:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - limit), os.SEEK_SET)
-        except OSError:
-            pass
-        return f.read().decode("utf-8", errors="ignore")
-
-
-def bridge_id_from_remote_url(remote_url: str | None) -> str | None:
-    if not remote_url:
-        return None
-    match = SESSION_ID_RE.search(remote_url)
-    if not match:
-        return None
-    return "cse_" + match.group(0).removeprefix("session_")
-
-
-def find_claude_session_id(workdir: str, bridge_session_id: str | None) -> str | None:
-    project_dir = encoded_project_dir(workdir)
-    if not project_dir.exists():
-        return None
-    files = sorted(project_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if bridge_session_id:
-        needle = f'"bridgeSessionId":"{bridge_session_id}"'
-        for path in files:
-            text = tail_text(path)
-            if needle in text:
-                match = CLAUDE_SESSION_ID_RE.search(path.name)
-                if match:
-                    return match.group(0)
-                for line in text.splitlines():
-                    if needle in line:
-                        try:
-                            return json.loads(line).get("sessionId")
-                        except json.JSONDecodeError:
-                            return None
-    return None
-
-
-def refresh_session_identity(state: dict) -> dict:
-    dirty = "fifo" in state
-    state.pop("fifo", None)
-    if state.get("status") == "ready" and not state.get("channel"):
-        state["status"] = "legacy-no-channel"
-        dirty = True
-    if state.get("claude_session_id"):
-        if dirty:
-            write_state(state)
-        return state
-    bridge_session_id = state.get("bridge_session_id") or bridge_id_from_remote_url(state.get("remote_url"))
-    if bridge_session_id:
-        state["bridge_session_id"] = bridge_session_id
-    claude_session_id = find_claude_session_id(state["workdir"], bridge_session_id)
-    if claude_session_id:
-        state["claude_session_id"] = claude_session_id
-        write_state(state)
-    return state
-
-
-def task_id_for(prompt: str, claude_session_id: str, force_new: bool = False) -> str:
-    digest = hashlib.sha256((claude_session_id + "\0" + prompt).encode("utf-8")).hexdigest()
-    task_id = digest[:16]
-    if force_new:
-        task_id = f"{task_id}-{time.strftime('%Y%m%d%H%M%S')}"
-    return task_id
 
 
 def task_dir(task_id: str) -> Path:
@@ -284,19 +134,14 @@ def marker_path(task_id: str, status: str) -> Path:
     return task_dir(task_id) / f"{status}.json"
 
 
-def update_task(task: dict, status: str, **extra: object) -> dict:
-    task = {**task, **extra}
-    task["status"] = status
-    task["updated_at"] = now_iso()
-    write_json(task_status_path(task["id"]), task)
-    write_json(marker_path(task["id"], status), {"status": status, "timestamp": task["updated_at"]})
-    return task
+def task_file_path(task_id: str) -> Path:
+    return task_dir(task_id) / "task.md"
 
 
-def list_tasks() -> list[dict]:
+def list_tasks() -> list[dict[str, Any]]:
     if not TASKS_DIR.exists():
         return []
-    tasks = []
+    tasks: list[dict[str, Any]] = []
     for path in sorted(TASKS_DIR.glob("*/status.json")):
         try:
             tasks.append(read_json(path))
@@ -305,364 +150,319 @@ def list_tasks() -> list[dict]:
     return tasks
 
 
-def existing_task_for(prompt_sha256: str, claude_session_id: str) -> dict | None:
+def update_task(task: dict[str, Any], status: str, **extra: Any) -> dict[str, Any]:
+    task = {**task, **extra}
+    task["status"] = status
+    task["updated_at"] = now_iso()
+    write_json(task_status_path(task["id"]), task)
+    write_json(marker_path(task["id"], status), {"status": status, "timestamp": task["updated_at"]})
+    return task
+
+
+def task_id_for(prompt: str, workdir: str, force_new: bool = False) -> str:
+    digest = hashlib.sha256((workdir + "\0" + prompt).encode("utf-8")).hexdigest()
+    task_id = digest[:16]
+    if force_new:
+        task_id = f"{task_id}-{time.strftime('%Y%m%d%H%M%S')}"
+    return task_id
+
+
+def existing_task_for(prompt_sha256: str, workdir: str) -> dict[str, Any] | None:
     for task in list_tasks():
         if task.get("status") == "dry-run":
             continue
-        if task.get("prompt_sha256") == prompt_sha256 and task.get("claude_session_id") == claude_session_id:
+        if task.get("prompt_sha256") == prompt_sha256 and task.get("workdir") == workdir:
             return task
     return None
 
 
-def write_task_file(task_id: str, prompt: str) -> Path:
-    path = task_dir(task_id) / "task.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(prompt.rstrip("\n") + "\n")
-    return path
-
-
-def require_channel(state: dict) -> dict:
-    channel = state.get("channel") or {}
-    if state.get("status") != "ready":
-        raise SystemExit(f"Claude Code channel session is not ready: {state.get('status')}")
-    if channel.get("name") != CHANNEL_NAME or not channel.get("http_url") or not channel.get("token"):
-        raise SystemExit("active session was not started with the Codex delegate channel; stop and start a new session")
-    if not channel.get("handshake_done"):
-        raise SystemExit("Codex delegate channel handshake is incomplete; stop and start a new session")
-    return channel
-
-
-def post_channel_task(channel: dict, task_id: str, task_file: Path, timeout: float = 5.0) -> None:
-    url = channel["http_url"].rstrip("/") + "/task"
-    body = json.dumps({"task_id": task_id, "task_file": str(task_file)}).encode("utf-8")
-    req = request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "content-type": "application/json",
-            "x-codex-delegate-token": channel["token"],
-        },
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as res:
-            if res.status != 202:
-                raise SystemExit(f"channel rejected task: HTTP {res.status}")
-    except error.URLError as exc:
-        raise SystemExit(f"channel transport unavailable: {exc}") from exc
-
-
-def wait_for_task_status(task_id: str, statuses: set[str], timeout: float) -> dict | None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            task = read_json(task_status_path(task_id))
-        except (OSError, json.JSONDecodeError):
-            task = {}
-        if task.get("status") in statuses:
-            return task
-        time.sleep(0.25)
-    return None
-
-
-def create_task(state: dict, prompt: str, force_new: bool, transport: str) -> tuple[str, Path, dict]:
+def create_task(state: dict[str, Any], prompt: str, force_new: bool) -> tuple[str, Path, dict[str, Any]]:
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    session_key = state.get("claude_session_id") or state["session_name"]
     if not force_new:
-        existing = existing_task_for(prompt_sha256, session_key)
+        existing = existing_task_for(prompt_sha256, state["workdir"])
         if existing:
-            print("task already exists; not sending duplicate")
+            print("task already exists; not dispatching duplicate")
             print(f"task_id={existing['id']}")
             print(f"status={existing['status']}")
             print(f"task_file={existing['task_file']}")
             raise SystemExit(0)
-    task_id = task_id_for(prompt, session_key, force_new)
-    task_file = write_task_file(task_id, prompt)
+    task_id = task_id_for(prompt, state["workdir"], force_new)
+    task_file = task_file_path(task_id)
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_text(prompt.rstrip("\n") + "\n")
     task = {
         "id": task_id,
-        "status": "pending",
+        "status": "created",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "session_name": state["session_name"],
-        "remote_url": state.get("remote_url"),
-        "bridge_session_id": state.get("bridge_session_id"),
-        "claude_session_id": state.get("claude_session_id"),
         "workdir": state["workdir"],
         "prompt_sha256": prompt_sha256,
         "task_file": str(task_file),
-        "transport": transport,
+        "transport": "claude-background-agent",
     }
     write_json(task_status_path(task_id), task)
-    write_json(marker_path(task_id, "pending"), {"status": "pending", "timestamp": task["created_at"]})
+    write_json(marker_path(task_id, "created"), {"status": "created", "timestamp": task["created_at"]})
     return task_id, task_file, task
 
 
-def run_channel_handshake(state: dict) -> dict:
-    channel = state.get("channel") or {}
-    task_id, task_file, task = create_task(
-        state,
-        "Channel handshake only. Do not modify files. Call delegate_status ack, delegate_reply with 'channel handshake ok', then delegate_status done.",
-        True,
-        "channel",
+def dispatch_prompt(task_id: str, task_file: Path) -> str:
+    return (
+        f"Codex delegated task {task_id}.\n"
+        f"Read the task file at {task_file} and execute it exactly.\n"
+        "Do not ask me to paste the task again. Do not broaden scope.\n"
+        f"When complete, include TASK_DONE {task_id} in the final response."
     )
-    task = update_task(task, "pending", handshake=True)
-    post_channel_task(channel, task_id, task_file)
-    done = wait_for_task_status(task_id, {"done", "failed"}, 45)
-    if not done or done.get("status") != "done":
-        update_task(task, "failed", failure="channel handshake did not complete")
-        raise SystemExit("channel handshake failed; Claude Code session is not ready")
-    channel["handshake_done"] = True
-    channel["handshake_task_id"] = task_id
-    channel["handshake_done_at"] = now_iso()
-    state["channel"] = channel
-    state["status"] = "ready"
-    write_state(state)
-    return state
+
+
+def parse_bg_id(output: str) -> str | None:
+    match = BG_ID_RE.search(output)
+    return match.group(1) if match else None
+
+
+def job_dir(bg_id: str) -> Path:
+    return CLAUDE_JOBS_DIR / bg_id
+
+
+def job_state_path(bg_id: str) -> Path:
+    return job_dir(bg_id) / "state.json"
+
+
+def timeline_path(bg_id: str) -> Path:
+    return job_dir(bg_id) / "timeline.jsonl"
+
+
+def read_job_state(bg_id: str) -> dict[str, Any] | None:
+    path = job_state_path(bg_id)
+    if not path.exists():
+        return None
+    try:
+        return read_json(path)
+    except json.JSONDecodeError:
+        return None
+
+
+def map_job_state(job: dict[str, Any] | None) -> str:
+    if not job:
+        return "dispatched"
+    state = str(job.get("state") or "")
+    if state == "done":
+        return "done"
+    if state in {"failed", "error"}:
+        return "failed"
+    if state in {"stopped", "killed"}:
+        return "stopped"
+    return "running"
+
+
+def refresh_task_from_job(task: dict[str, Any]) -> dict[str, Any]:
+    bg_id = task.get("bg_id")
+    if not bg_id:
+        return task
+    job = read_job_state(str(bg_id))
+    mapped = map_job_state(job)
+    extra: dict[str, Any] = {
+        "job_state": job,
+        "job_state_file": str(job_state_path(str(bg_id))),
+        "timeline_file": str(timeline_path(str(bg_id))),
+    }
+    if job and isinstance(job.get("output"), dict):
+        extra["output_result"] = job["output"].get("result")
+    if mapped != task.get("status"):
+        return update_task(task, mapped, **extra)
+    task = {**task, **extra, "updated_at": now_iso()}
+    write_json(task_status_path(task["id"]), task)
+    return task
+
+
+def refresh_all_tasks() -> list[dict[str, Any]]:
+    refreshed = []
+    for task in list_tasks():
+        if task.get("status") in TERMINAL_TASK_STATES:
+            refreshed.append(task)
+        else:
+            refreshed.append(refresh_task_from_job(task))
+    return refreshed
+
+
+def wait_for_task(task: dict[str, Any], timeout: float) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    current = task
+    while time.time() < deadline:
+        current = refresh_task_from_job(current)
+        if current.get("status") in {"done", "failed", "stopped"}:
+            return current
+        time.sleep(0.5)
+    return update_task(current, "timeout", timeout_seconds=timeout)
+
+
+def dispatch_task(state: dict[str, Any], task: dict[str, Any], task_file: Path) -> dict[str, Any]:
+    prompt = dispatch_prompt(task["id"], task_file)
+    proc = run_command(["claude", "--bg", prompt], cwd=state["workdir"], timeout=30)
+    combined_output = (proc.stdout or "") + (proc.stderr or "")
+    bg_id = parse_bg_id(combined_output)
+    if proc.returncode != 0 or not bg_id:
+        return update_task(
+            task,
+            "dispatch_failed",
+            dispatch_stdout=proc.stdout,
+            dispatch_stderr=proc.stderr,
+            dispatch_exit_code=proc.returncode,
+        )
+    return update_task(
+        task,
+        "dispatched",
+        bg_id=bg_id,
+        dispatch_stdout=proc.stdout,
+        dispatch_stderr=proc.stderr,
+        dispatch_prompt=prompt,
+        job_state_file=str(job_state_path(bg_id)),
+        timeline_file=str(timeline_path(bg_id)),
+    )
 
 
 def start(args: argparse.Namespace) -> None:
-    preflight = run_preflight()
-    if STATE_FILE.exists():
-        state = read_state()
-        pid = int(state.get("controller_pid", 0) or 0)
-        if pid and process_alive(pid):
-            raise SystemExit(f"already running: {state.get('session_name')}")
-        cleanup_runtime()
-
-    cleanup_runtime()
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-    channel_token = secrets.token_urlsafe(24)
-    write_mcp_config(channel_token)
-    register_local_mcp_config(channel_token, args.workdir)
-
-    ctrl_log = CTRL_LOG_FILE.open("ab")
-    subprocess.Popen(
-        [
-            str(Path(__file__).resolve()),
-            "controller",
-            "--name",
-            args.name,
-            "--workdir",
-            args.workdir,
-        ],
-        cwd=args.workdir,
-        stdout=ctrl_log,
-        stderr=ctrl_log,
-        stdin=subprocess.DEVNULL,
-        close_fds=True,
-        start_new_session=True,
-    )
-
-    deadline = time.time() + 20
-    last_state = None
-    while time.time() < deadline:
-        if STATE_FILE.exists():
-            state = read_state()
-            last_state = state
-            channel = state.get("channel") or {}
-            if state.get("remote_url") and channel.get("mcp_ready") and channel.get("http_url"):
-                state = refresh_session_identity(state)
-                state = run_channel_handshake(state)
-                print("Claude Code remote-control session ready")
-                print(f"session={state['session_name']}")
-                print(f"remote_url={state['remote_url']}")
-                print(f"channel={state['channel']['http_url']}")
-                print(f"preflight={preflight['status']}")
-                print(f"state={STATE_FILE}")
-                return
-        time.sleep(0.2)
-    raise SystemExit(f"timeout waiting for Claude remote-control channel session; last_state={last_state}")
-
-
-def controller(args: argparse.Namespace) -> None:
-    require_unsandboxed()
-    RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-
-    master_fd, slave_fd = pty.openpty()
-    child = subprocess.Popen(
-        [
-            "claude",
-            "--permission-mode",
-            "auto",
-            "--mcp-config",
-            str(MCP_CONFIG_FILE),
-            "--dangerously-load-development-channels",
-            f"server:{CHANNEL_NAME}",
-            "--remote-control",
-            args.name,
-        ],
-        cwd=args.workdir,
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        close_fds=True,
-        start_new_session=True,
-    )
-    os.close(slave_fd)
-    os.set_blocking(master_fd, False)
-
+    preflight = run_preflight(args.workdir)
+    if args.clean_runtime and RUNTIME_DIR.exists():
+        shutil.rmtree(RUNTIME_DIR)
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        TASKS_DIR.mkdir(parents=True, exist_ok=True)
     state = {
-        "session_name": args.name,
-        "status": "starting",
+        "mode": "background-agent",
+        "status": "ready",
         "workdir": args.workdir,
-        "controller_pid": os.getpid(),
-        "claude_pid": child.pid,
-        "log": str(LOG_FILE),
+        "started_at": now_iso(),
+        "runtime_dir": str(RUNTIME_DIR),
         "tasks_dir": str(TASKS_DIR),
-        "visible": "remote-control",
-        "remote_url": None,
-        "bridge_session_id": None,
-        "claude_session_id": None,
-        "permission_mode": "auto",
-        "channel": {
-            "name": CHANNEL_NAME,
-            "status": "starting",
-            "mcp_config": str(MCP_CONFIG_FILE),
-            "mcp_scope": "local",
-            "token": read_json(MCP_CONFIG_FILE)["mcpServers"][CHANNEL_NAME]["args"][-1],
-        },
+        "claude_version": preflight["claude_version"],
     }
     write_state(state)
-
-    recent_output = ""
-    development_channel_confirmed = False
-
-    try:
-        with LOG_FILE.open("ab") as log:
-            while True:
-                if child.poll() is not None:
-                    state["status"] = "exited"
-                    state["exit_code"] = child.returncode
-                    write_state(state)
-                    break
-                readable, _, _ = select.select([master_fd], [], [], 0.2)
-                for fd in readable:
-                    if fd == master_fd:
-                        try:
-                            data = os.read(master_fd, 8192)
-                        except BlockingIOError:
-                            data = b""
-                        if data:
-                            os.write(sys.stdout.fileno(), data)
-                            sys.stdout.flush()
-                            log.write(data)
-                            log.flush()
-                            text = strip_ansi(data.decode("utf-8", errors="ignore"))
-                            recent_output = (recent_output + text)[-4000:]
-                            compact_output = re.sub(r"[^a-z0-9]+", "", recent_output.lower())
-                            if (
-                                not development_channel_confirmed
-                                and DEV_CHANNEL_CONFIRM_TEXT in compact_output
-                                and DEV_CHANNEL_CONFIRM_HINT in compact_output
-                            ):
-                                os.write(master_fd, b"\r")
-                                development_channel_confirmed = True
-                                state["channel"]["development_prompt_confirmed"] = True
-                                state["channel"]["development_prompt_confirmed_at"] = now_iso()
-                                write_state(state)
-                            remote_url = extract_remote_url(recent_output)
-                            if remote_url:
-                                state["remote_url"] = remote_url
-                                state["bridge_session_id"] = bridge_id_from_remote_url(remote_url)
-                                state["status"] = "remote-ready"
-                                state = refresh_session_identity(state)
-                                write_state(state)
-    finally:
-        for fd in (master_fd,):
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+    print("Claude Code background delegate runtime ready")
+    print(f"workdir={state['workdir']}")
+    print(f"state={STATE_FILE}")
 
 
 def send(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    state = refresh_session_identity(read_state())
-    channel = require_channel(state)
+    state = read_state()
+    if state.get("mode") != "background-agent" or state.get("status") != "ready":
+        raise SystemExit("Claude Code background delegate runtime is not ready; run start first")
     prompt = normalize_prompt_arg(args.prompt)
-    task_id, task_file, task = create_task(state, prompt, args.force_new, "channel")
-    state["last_task"] = {"id": task_id, "status": "pending", "task_file": str(task_file)}
-    write_state(state)
+    task_id, task_file, task = create_task(state, prompt, args.force_new)
     if args.dry_run:
         task = update_task(task, "dry-run", dry_run=True)
     else:
-        post_channel_task(channel, task_id, task_file)
-        task = wait_for_task_status(task_id, {"ack", "done", "failed"}, args.ack_timeout)
-        if not task:
-            task = update_task(read_json(task_status_path(task_id)), "failed", failure="channel ack timeout")
-    state["last_task"] = {"id": task_id, "status": task["status"], "task_file": str(task_file)}
+        task = dispatch_task(state, task, task_file)
+        if args.wait and task.get("status") == "dispatched":
+            task = wait_for_task(task, args.wait)
+    state["last_task"] = {"id": task_id, "status": task["status"], "task_file": str(task_file), "bg_id": task.get("bg_id")}
     write_state(state)
     print(f"task_id={task_id}")
     print(f"status={task['status']}")
+    if task.get("bg_id"):
+        print(f"bg_id={task['bg_id']}")
     print(f"task_file={task_file}")
-    print(f"remote_url={state.get('remote_url')}")
-    if task["status"] == "failed":
+    if task.get("status") in {"dispatch_failed", "failed", "timeout"}:
         raise SystemExit(1)
 
 
-def status(_: argparse.Namespace) -> None:
+def status(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    state = refresh_session_identity(read_state())
-    state["tasks"] = list_tasks()
-    print(json.dumps(state, indent=2, sort_keys=True))
-
-
-def stop(_: argparse.Namespace) -> None:
-    require_unsandboxed()
-    if not STATE_FILE.exists():
-        cleanup_runtime()
-        print("Claude Code visible session stopped")
-        return
     state = read_state()
-    for key in ("claude_pid", "controller_pid"):
-        pid = int(state.get(key, 0) or 0)
-        if pid and process_alive(pid):
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-    time.sleep(0.5)
-    for key in ("claude_pid", "controller_pid"):
-        pid = int(state.get(key, 0) or 0)
-        if pid and process_alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-    cleanup_runtime()
-    print("Claude Code visible session stopped")
-    print(f"session={state.get('session_name', 'unknown')}")
+    tasks = refresh_all_tasks()
+    output = {
+        **state,
+        "agents": agents_json(state["workdir"]) if args.include_agents else None,
+        "tasks": tasks,
+    }
+    if not args.include_agents:
+        output.pop("agents")
+    print(json.dumps(output, indent=2, sort_keys=True))
+
+
+def stop(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    state = read_state()
+    stopped: list[str] = []
+    for task in refresh_all_tasks():
+        bg_id = task.get("bg_id")
+        if not bg_id:
+            continue
+        if args.all or task.get("status") not in TERMINAL_TASK_STATES:
+            proc = run_command(["claude", "stop", str(bg_id)], cwd=state["workdir"], timeout=15)
+            if proc.returncode == 0:
+                update_task(task, "stopped", stop_stdout=proc.stdout, stop_stderr=proc.stderr)
+                stopped.append(str(bg_id))
+            elif task.get("status") in TERMINAL_TASK_STATES:
+                continue
+            else:
+                update_task(task, "failed", stop_stdout=proc.stdout, stop_stderr=proc.stderr, stop_exit_code=proc.returncode)
+    if args.clear_runtime:
+        shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
+    print("Claude Code background delegate stop complete")
+    print(f"stopped={','.join(stopped) if stopped else 'none'}")
+
+
+def remove(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    state = read_state()
+    ids = args.ids
+    removed: list[str] = []
+    for item in ids:
+        task = next((candidate for candidate in list_tasks() if candidate.get("id") == item or candidate.get("bg_id") == item), None)
+        bg_id = str(task.get("bg_id") if task else item)
+        proc = run_command(["claude", "rm", bg_id], cwd=state["workdir"], timeout=15)
+        if proc.returncode != 0:
+            if task and "No job matching" in (proc.stderr + proc.stdout):
+                task = update_task(task, "removed", rm_stdout=proc.stdout, rm_stderr=proc.stderr, rm_already_absent=True)
+                state["last_task"] = {"id": task["id"], "status": task["status"], "task_file": task.get("task_file"), "bg_id": task.get("bg_id")}
+                write_state(state)
+                removed.append(bg_id)
+                continue
+            raise SystemExit(f"claude rm {bg_id} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+        removed.append(bg_id)
+        if task:
+            task = update_task(task, "removed", rm_stdout=proc.stdout, rm_stderr=proc.stderr)
+            state["last_task"] = {"id": task["id"], "status": task["status"], "task_file": task.get("task_file"), "bg_id": task.get("bg_id")}
+            write_state(state)
+    print(f"removed={','.join(removed)}")
+
+
+def preflight(args: argparse.Namespace) -> None:
+    print(json.dumps(run_preflight(args.workdir), indent=2, sort_keys=True))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("start")
-    p.add_argument("--name", default=f"codex-claude-{time.strftime('%H%M%S')}")
+    p = sub.add_parser("preflight")
     p.add_argument("--workdir", default=os.getcwd())
+    p.set_defaults(func=preflight)
+
+    p = sub.add_parser("start")
+    p.add_argument("--workdir", default=os.getcwd())
+    p.add_argument("--clean-runtime", action="store_true")
     p.set_defaults(func=start)
 
     p = sub.add_parser("send")
     p.add_argument("prompt")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
-    p.add_argument("--ack-timeout", type=float, default=30.0)
+    p.add_argument("--wait", type=float, default=0.0, help="seconds to wait for done/failed after dispatch")
     p.set_defaults(func=send)
 
     p = sub.add_parser("status")
+    p.add_argument("--include-agents", action="store_true")
     p.set_defaults(func=status)
 
-    p = sub.add_parser("preflight")
-    p.set_defaults(func=lambda _: print(json.dumps(run_preflight(), indent=2, sort_keys=True)))
-
     p = sub.add_parser("stop")
+    p.add_argument("--all", action="store_true", help="also stop terminal tasks tracked in this runtime")
+    p.add_argument("--clear-runtime", action="store_true")
     p.set_defaults(func=stop)
 
-    p = sub.add_parser("controller")
-    p.add_argument("--name", required=True)
-    p.add_argument("--workdir", required=True)
-    p.set_defaults(func=controller)
+    p = sub.add_parser("rm")
+    p.add_argument("ids", nargs="+", help="task ids or Claude background short ids")
+    p.set_defaults(func=remove)
 
     args = parser.parse_args()
     args.func(args)
