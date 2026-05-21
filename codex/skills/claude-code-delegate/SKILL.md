@@ -5,6 +5,35 @@ description: Dispatch bounded work to Claude Code background agents, track state
 
 # Claude Code Delegate
 
+## Operating Model
+
+Use Claude as a bounded background worker. Codex remains the orchestrator, reviewer, integrator, and verifier.
+
+For substantial changes, do not send one broad task. Split the work into bounded tasks with:
+
+- a narrow objective
+- allowed files or directories
+- forbidden files or directories
+- whether file edits are allowed
+- expected output
+- stop conditions
+
+After dispatch, continue the Codex conversation or local work. Do not wait in `send`. Completion is discovered only at explicit `status` checkpoints.
+
+When a task reaches `done`, inspect the task result and verify the worktree directly before trusting it. Use `git status`, `git diff`, tests, and focused file inspection as appropriate. Clean up completed background jobs with `rm` after their results have been reviewed.
+
+Default large-change loop:
+
+1. Decompose the target into bounded Claude tasks.
+2. Dispatch each task with `send`.
+3. Continue local Codex work or discussion without waiting.
+4. Run `status --include-agents` at checkpoints.
+5. For `done` tasks, inspect and verify the produced artifacts.
+6. Integrate or correct the result.
+7. Stop or remove stale, failed, or completed jobs.
+
+Do not use Claude output as final verification. Claude may produce useful work, but Codex owns the final correctness decision.
+
 ## Procedure
 
 1. Run preflight outside the Codex sandbox.
