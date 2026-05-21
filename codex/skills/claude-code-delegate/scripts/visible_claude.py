@@ -18,8 +18,13 @@ from typing import Any
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
+CODEX_HOME = SKILL_DIR.parents[1]
 RUNTIME_DIR = SKILL_DIR / "runtime"
 VENV_PYTHON = SKILL_DIR / ".venv" / "bin" / "python"
+WATCHER_SCRIPT = CODEX_HOME / "bin" / "claude-delegate-watch"
+WATCHER_LABEL = "com.leegangho.codex.claude-delegate-watch"
+WATCHER_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
+MONITOR_HEARTBEAT_FILE = RUNTIME_DIR / "monitor" / "heartbeat.json"
 STATE_FILE = RUNTIME_DIR / "current.json"
 DAEMON_FILE = RUNTIME_DIR / "daemon.json"
 LOCK_FILE = SKILL_DIR / ".runtime.lock"
@@ -436,6 +441,40 @@ def claude_version(cwd: str) -> str:
     return proc.stdout.strip()
 
 
+def trigger_delegate_watcher() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "label": WATCHER_LABEL,
+        "script": str(WATCHER_SCRIPT),
+        "plist": str(WATCHER_PLIST),
+        "script_exists": WATCHER_SCRIPT.exists(),
+        "plist_exists": WATCHER_PLIST.exists(),
+        "kickstarted": False,
+        "heartbeat_file": str(MONITOR_HEARTBEAT_FILE),
+    }
+    if not WATCHER_SCRIPT.exists():
+        result["status"] = "missing-script"
+        return result
+
+    direct = run_command([str(WATCHER_SCRIPT), "--quiet"], cwd=str(SKILL_DIR), timeout=25)
+    result["direct_exit_code"] = direct.returncode
+    if direct.returncode != 0:
+        result["status"] = "direct-run-failed"
+        result["error"] = direct.stderr.strip() or direct.stdout.strip()
+        return result
+
+    if WATCHER_PLIST.exists() and sys.platform == "darwin":
+        domain = f"gui/{os.getuid()}/{WATCHER_LABEL}"
+        kick = run_command(["launchctl", "kickstart", "-k", domain], cwd=str(SKILL_DIR), timeout=10)
+        result["kickstarted"] = kick.returncode == 0
+        if kick.returncode != 0:
+            result["kickstart_error"] = kick.stderr.strip() or kick.stdout.strip()
+
+    heartbeat = read_json(MONITOR_HEARTBEAT_FILE) if MONITOR_HEARTBEAT_FILE.exists() else None
+    result["status"] = "ok"
+    result["heartbeat"] = heartbeat
+    return result
+
+
 def run_preflight(cwd: str) -> dict[str, Any]:
     require_unsandboxed()
     ensure_dirs()
@@ -452,6 +491,7 @@ def run_preflight(cwd: str) -> dict[str, Any]:
         "runtime_dir": str(RUNTIME_DIR),
         "venv_python": str(VENV_PYTHON),
         "claude_version": claude_version(cwd),
+        "delegate_watcher": trigger_delegate_watcher(),
     }
 
 

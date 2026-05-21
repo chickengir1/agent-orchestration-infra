@@ -92,7 +92,9 @@ Do not use Claude output as final verification. Claude may produce useful work, 
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py preflight --workdir "$(pwd)"
 ```
 
-Preflight verifies unsandboxed execution, runtime write access, Claude Code availability, and the Python SDK runtime.
+Preflight verifies unsandboxed execution, runtime write access, Claude Code availability, and the Python SDK runtime. It also triggers the local `claude-delegate-watch` launchd watcher once, so `runtime/monitor/heartbeat.json` is refreshed before work starts.
+
+Codex must also create a thread-scoped heartbeat automation when delegation work should wake a cold thread. That automation is a Codex app/thread concern, not something the Python worker script can create. Delete the thread-scoped automation when the session/checkpoint ends.
 
 2. Start the persistent worker pool.
 
