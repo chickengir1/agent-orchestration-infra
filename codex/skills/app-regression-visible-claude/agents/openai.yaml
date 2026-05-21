@@ -1,4 +1,0 @@
-interface:
-  display_name: "App Regression Visible Claude"
-  short_description: "Delegate app-regression patches to visible Claude Code while Codex reviews."
-  default_prompt: "Use the app-regression visible Claude workflow: define one checkpoint, send a bounded prompt to Claude Code, review the result, and verify only the checkpoint target."

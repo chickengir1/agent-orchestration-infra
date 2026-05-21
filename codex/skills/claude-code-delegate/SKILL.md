@@ -1,91 +1,146 @@
 ---
 name: claude-code-delegate
-description: Delegate bounded code-editing tasks from Codex to the local Claude Code CLI while Codex remains the planner, scope owner, reviewer, and final integrator. Use when the user asks Codex to send a code modification request to Claude Code, trigger Claude Code from the CLI, run Claude Code as a constrained worker, review Claude Code's diff, or compare code-reading predictions with the actual execution sequence after delegation.
+description: Delegate work from Codex to the local Claude Code CLI. Use whenever Codex should send a prompt to Claude Code, let Claude do the main worker task in a visible or streamed session, avoid permission stalls when explicitly allowed, then inspect and verify the result as orchestrator/reviewer.
 ---
 
 # Claude Code Delegate
 
-## Overview
+## Core
 
-Use this skill to let Codex call Claude Code as a bounded code-editing worker. Claude Code must not act as a co-agent, architect, product decision-maker, or user-facing collaborator; it receives a narrow job spec, edits within scope, and reports machine-checkable results for Codex to review.
+Codex sends a bounded prompt to Claude Code. Claude Code does the worker task. Codex reviews the result before trusting it.
 
-## Authority Model
+That is the whole model.
 
-Codex owns intent, scope, architecture, review, and final integration.
-Claude Code owns only the assigned patch.
+## Roles
 
-Reject delegation when the task requires unresolved product judgment, broad architecture, unrelated refactors, production access, or user clarification.
+- Codex owns intent, scope, prompt quality, review, verification, and the final user report.
+- Claude Code owns the assigned worker task.
+- Claude output is not trusted until Codex checks the changed files and validation result.
 
-## Delegation Workflow
+## Basic Flow
 
-1. Read the relevant repo context first. Do not outsource the initial understanding step.
-2. Decide whether the task is small enough for a bounded worker patch.
-3. Define the objective, allowed files, forbidden files, constraints, validation commands, and expected report format.
-4. Create a job directory under `.codex/delegations/<job-id>/`.
-5. Run `scripts/delegate_claude.py` with the objective and file scope, or write the job spec manually when the runner is not suitable.
-6. Let Claude Code edit only inside the assigned scope. By default it does not get Bash.
-7. Inspect the saved scope report and runner validation report.
-8. Review the resulting git diff yourself.
-9. Repair or reject any incorrect, overbroad, or scope-violating patch.
-10. Run any additional final validation as Codex before reporting completion.
+1. Codex reads enough local context to define the task.
+2. Codex writes one clear worker prompt.
+3. Codex sends the prompt to Claude Code.
+4. Claude Code works in a visible, streamed, or resumable session.
+5. Codex inspects what changed.
+6. Codex runs the needed verification.
+7. Codex reports what happened.
 
-## Runner Quick Start
+## Preflight
 
-From the repository root:
+- Check Claude Code exists with `claude --version`.
+- If using Remote Control, the Claude session must be authenticated with claude.ai OAuth.
+- If `claude --print` returns `Not logged in`, use an authenticated existing session or have the user run `/login`; do not misclassify this as a permission problem.
+- If Codex is sandboxed and `--resume <session-id>` cannot read `~/.claude/projects/...jsonl`, rerun the same Claude command through the approved outside-sandbox path.
+
+## Transport
+
+Use the simplest transport that satisfies the user's visibility requirement.
+
+### Visible Session
+
+Use this when the user wants to watch Claude Code work.
+
+Preferred official path:
 
 ```bash
-python3 ~/.codex/skills/claude-code-delegate/scripts/delegate_claude.py \
-  --objective "Update the target component to handle the empty state." \
-  --allow src/components/Target.tsx \
-  --forbid package.json \
-  --validate "pnpm lint" \
-  --validate "pnpm test"
+claude --remote-control "<name>" --permission-mode acceptEdits
 ```
 
-The runner writes `.codex/delegations/<job-id>/task.md`, invokes `claude -p`, captures logs, records before/after diff and status snapshots, checks file scope for changes made by this delegation only, and executes `--validate` commands itself after Claude exits.
+If the user explicitly wants the worker not to stop on permissions in a trusted local workspace:
 
-Default Claude tools are `Read,Edit,Write`. `Bash` is intentionally disabled so Claude does not burn turns on validation commands that the local permission layer may deny. Use `--allow-worker-bash` only for a job that truly needs shell inspection or mechanical commands during the patch.
+```bash
+claude --remote-control "<name>" --permission-mode bypassPermissions
+```
 
-Default permission mode is `acceptEdits` for normal repos. For local agent/skill infrastructure repos under `.claude`, `.codex`, or `.agents`, the runner defaults to `bypassPermissions` so Claude can edit files such as `SKILL.md` that Claude Code otherwise treats as sensitive. Scope checking still runs after the edit.
+Then send the bounded prompt into that open Claude Code session. On macOS Terminal this can be done by opening Claude in a visible terminal and using Terminal's own `do script` command to submit text to that session. If `tmux` is installed, a common alternative is to run Claude inside tmux and use `tmux send-keys`.
 
-The runner uses `--no-session-persistence` by default. Add `--bare` only when Claude Code has API-key or auth-helper credentials available; bare mode does not read OAuth/keychain authentication.
+### Streamed Worker
 
-## Claude Worker Constraints
+Use this when visible terminal control is not required but Codex should see live output.
 
-Include these constraints in every task, either through the runner or manually:
+```bash
+claude --print \
+  --output-format stream-json \
+  --verbose \
+  --include-partial-messages \
+  --include-hook-events \
+  --permission-mode acceptEdits \
+  "<prompt>"
+```
 
-- Do not reinterpret the user request.
+### Resumable Worker
+
+Use this when a Claude session id is already known.
+
+```bash
+claude --resume <session-id> --print "<prompt>"
+```
+
+### Fresh Non-Interactive Worker
+
+Use this for quick bounded tasks where a transcript is enough.
+
+```bash
+claude --print "<prompt>"
+```
+
+## Permissions
+
+Do not solve permission stalls by adding vague instructions to the prompt. Use Claude Code permission modes and allowlists.
+
+- `acceptEdits`: normal default for code work; reads and edits can proceed with fewer prompts.
+- `allowedTools`: pre-approve known safe commands for a task, such as read commands, package manager tests, or project lint commands.
+- `bypassPermissions` / `--dangerously-skip-permissions`: use only when the user explicitly wants uninterrupted work in a trusted or isolated workspace.
+
+If permissions still block the worker, Codex must report the exact blocker and either relaunch with the approved permission mode or narrow the task.
+
+## Prompt Shape
+
+```text
+You are a bounded worker. Codex is the orchestrator and reviewer.
+
+Task:
+...
+
+Allowed files:
+...
+
+Do not touch:
+...
+
+Constraints:
 - Do not broaden scope.
-- Do not make architectural decisions.
-- Do not ask the user questions.
-- Do not edit outside allowed files.
-- Do not refactor unrelated code.
-- Apply the smallest correct patch that satisfies the objective.
-- Write code inside the Code Shape Conventions generated from the local `fundamental-reviewer` principles.
-- Do not run validation commands unless the task explicitly enables worker Bash.
-- Report only changed files, summary, validation not run by worker, and blockers.
+- Do not make product or architecture decisions.
+- Do not edit outside the allowed files.
+- Do not perform unrelated cleanup.
+- If blocked by permissions or missing credentials, stop and report the exact blocker.
 
-The conventions are writing constraints, not an invitation to perform a broad cleanup. Claude Code should apply them only inside the assigned patch.
+Expected output:
+- Changed files
+- Summary
+- Validation run, or "not run"
+- Blockers
+```
 
-## Engineering Retrospective
+If the task is too broad to express this way, Codex must split it before sending it.
 
-After a meaningful delegation, produce a short engineering retrospective with two separate parts:
+## Review
 
-1. Code-reading prediction review: what Codex expected from static code inspection, which execution path or change point it predicted, and where that prediction was right or wrong.
-2. Actual behavior sequence review: what really happened after Claude Code ran, what files changed, which validation or runtime sequence confirmed behavior, and what principle explains the final result.
+After Claude finishes, Codex must inspect the actual files, not only Claude's summary.
 
-Use `references/engineering-retrospective.md` for the expected structure.
+- Check changed files.
+- Check scope.
+- Run the needed tests or inspection.
+- Fix, reject, or re-delegate if the patch is wrong.
+- Report only the verified result.
 
-## Resources
+If `claude` is missing, unauthenticated, blocked, or still running unexpectedly, stop and report the blocker.
 
-- `scripts/delegate_claude.py`: Create a delegation job, run Claude Code CLI, capture logs, save diff, and check scope.
-- `scripts/check_scope.py`: Fail when changed files escape the allowed/forbidden file contract.
-- `references/job-spec.md`: Job spec schema for `.codex/delegations/<job-id>/task.md`.
-- `references/runner-contract.md`: Runner behavior, CLI assumptions, exit codes, and failure handling.
-- `references/code-shape-conventions.md`: Condensed code-writing conventions derived from `fundamental-reviewer`.
-- `references/engineering-retrospective.md`: Retrospective format for prediction-versus-actual analysis.
-- `assets/worker-system-prompt.md`: Minimal Claude worker prompt that strips collaborator behavior.
+## Common Patterns
 
-## Safety Notes
-
-Prefer non-interactive Claude Code execution. If the `claude` binary is missing, authenticated incorrectly, or blocked by network permissions, stop and report the blocker instead of faking delegation. Do not leave background Claude jobs running at the end of the turn.
+- Official visible control: `claude --remote-control`.
+- Terminal source of truth: keep Claude Code running in a visible terminal, then inject the Codex-authored prompt.
+- tmux/PTY control: common for long-running or remote sessions; use `tmux send-keys` when tmux exists.
+- Hooks: useful for notifications, logging, formatting, and permission routing; they are optional infrastructure, not required for basic delegation.
