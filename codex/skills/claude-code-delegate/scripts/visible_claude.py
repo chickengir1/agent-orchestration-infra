@@ -160,23 +160,42 @@ def run_preflight() -> dict:
 
 
 def write_mcp_config(token: str) -> None:
-    write_json(
-        MCP_CONFIG_FILE,
-        {
-            "mcpServers": {
-                CHANNEL_NAME: {
-                    "command": sys.executable,
-                    "args": [
-                        str(CHANNEL_SERVER),
-                        "--runtime-dir",
-                        str(RUNTIME_DIR),
-                        "--token",
-                        token,
-                    ],
-                }
-            }
-        },
+    write_json(MCP_CONFIG_FILE, {"mcpServers": {CHANNEL_NAME: channel_server_spec(token)}})
+
+
+def channel_server_spec(token: str) -> dict:
+    return {
+        "command": sys.executable,
+        "args": [
+            str(CHANNEL_SERVER),
+            "--runtime-dir",
+            str(RUNTIME_DIR),
+            "--token",
+            token,
+        ],
+    }
+
+
+def register_local_mcp_config(token: str, workdir: str) -> None:
+    spec = json.dumps(channel_server_spec(token), separators=(",", ":"))
+    subprocess.run(
+        ["claude", "mcp", "remove", "--scope", "local", CHANNEL_NAME],
+        cwd=workdir,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
     )
+    proc = subprocess.run(
+        ["claude", "mcp", "add-json", "--scope", "local", CHANNEL_NAME, spec],
+        cwd=workdir,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"failed to register local MCP channel server: {proc.stderr.strip() or proc.stdout.strip()}")
 
 
 def encoded_project_dir(workdir: str) -> Path:
@@ -414,6 +433,7 @@ def start(args: argparse.Namespace) -> None:
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     channel_token = secrets.token_urlsafe(24)
     write_mcp_config(channel_token)
+    register_local_mcp_config(channel_token, args.workdir)
 
     ctrl_log = CTRL_LOG_FILE.open("ab")
     subprocess.Popen(
@@ -498,6 +518,7 @@ def controller(args: argparse.Namespace) -> None:
             "name": CHANNEL_NAME,
             "status": "starting",
             "mcp_config": str(MCP_CONFIG_FILE),
+            "mcp_scope": "local",
             "token": read_json(MCP_CONFIG_FILE)["mcpServers"][CHANNEL_NAME]["args"][-1],
         },
     }

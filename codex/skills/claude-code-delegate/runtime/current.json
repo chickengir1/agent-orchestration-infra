@@ -1,0 +1,11 @@
+{
+  "channel": {
+    "http_port": 56223,
+    "http_ready": true,
+    "http_url": "http://127.0.0.1:56223",
+    "server_exited_at": "2026-05-21T04:17:08Z",
+    "server_pid": 78767,
+    "server_started_at": "2026-05-21T04:16:38Z",
+    "updated_at": "2026-05-21T04:17:08Z"
+  }
+}

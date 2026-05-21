@@ -21,7 +21,7 @@ This skill must not be operated inside the Codex sandbox. It owns local ports, a
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --name "<session-name>" --workdir "$(pwd)"
 ```
 
-`start` creates a local MCP channel server, launches Claude Code with `--dangerously-load-development-channels server:codex_delegate_channel`, waits for Remote Control, waits for the channel MCP server, sends a handshake task, and only reports ready after Claude acknowledges and completes that handshake through the channel reply tools.
+`start` creates the runtime MCP config, registers the channel server in Claude Code local MCP config for the target workdir, launches Claude Code with `--dangerously-load-development-channels server:codex_delegate_channel`, waits for Remote Control, waits for the channel MCP server, sends a handshake task, and only reports ready after Claude acknowledges and completes that handshake through the channel reply tools.
 
 During research-preview channel development, Claude Code shows an official local-development confirmation prompt before loading a custom channel. The controller may answer that exact startup confirmation once, after matching the expected prompt text. This is not a task delivery path and must never be used to inject user work into the TUI.
 
