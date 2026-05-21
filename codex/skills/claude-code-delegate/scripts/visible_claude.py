@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ WATCHER_LABEL = "com.leegangho.codex.claude-delegate-watch"
 WATCHER_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
 MONITOR_HEARTBEAT_FILE = RUNTIME_DIR / "monitor" / "heartbeat.json"
 THREAD_HEARTBEAT_AUTOMATION_NAME = "Claude delegate heartbeat"
+AUTOMATIONS_DIR = CODEX_HOME / "automations"
 STATE_FILE = RUNTIME_DIR / "current.json"
 DAEMON_FILE = RUNTIME_DIR / "daemon.json"
 LOCK_FILE = SKILL_DIR / ".runtime.lock"
@@ -496,14 +498,43 @@ def thread_heartbeat_automation_state(tasks: list[dict[str, Any]] | None = None)
     }
 
 
-def require_thread_heartbeat_automation_confirmed(confirmed: bool) -> None:
-    if confirmed:
-        return
-    raise SystemExit(
-        "thread-scoped heartbeat automation must be created before non-dry-run send/dispatch; "
-        "create the Codex thread heartbeat automation for this conversation, then rerun with "
-        "--thread-heartbeat-automation-confirmed"
-    )
+def automation_toml_path(automation_id: str) -> Path:
+    if not automation_id or "/" in automation_id or "\\" in automation_id or automation_id in {".", ".."}:
+        raise SystemExit(f"invalid automation id: {automation_id!r}")
+    return AUTOMATIONS_DIR / automation_id / "automation.toml"
+
+
+def read_automation(automation_id: str) -> dict[str, Any]:
+    path = automation_toml_path(automation_id)
+    if not path.exists():
+        raise SystemExit(f"thread heartbeat automation not found: {path}")
+    try:
+        return tomllib.loads(path.read_text())
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"invalid automation TOML for {automation_id}: {exc}") from exc
+
+
+def require_thread_heartbeat_automation(automation_id: str | None) -> None:
+    if not automation_id:
+        raise SystemExit(
+            "non-dry-run send/dispatch requires --thread-heartbeat-automation-id; "
+            "create the Codex thread heartbeat automation for this conversation first"
+        )
+    automation = read_automation(automation_id)
+    errors: list[str] = []
+    if automation.get("id") != automation_id:
+        errors.append(f"id mismatch: {automation.get('id')!r}")
+    if automation.get("kind") != "heartbeat":
+        errors.append(f"kind is not heartbeat: {automation.get('kind')!r}")
+    if automation.get("status") != "ACTIVE":
+        errors.append(f"status is not ACTIVE: {automation.get('status')!r}")
+    if not automation.get("target_thread_id"):
+        errors.append("missing target_thread_id")
+    prompt = str(automation.get("prompt") or "")
+    if str(MONITOR_HEARTBEAT_FILE) not in prompt:
+        errors.append(f"prompt does not mention heartbeat file: {MONITOR_HEARTBEAT_FILE}")
+    if errors:
+        raise SystemExit("invalid thread heartbeat automation: " + "; ".join(errors))
 
 
 def run_preflight(cwd: str) -> dict[str, Any]:
@@ -974,7 +1005,7 @@ def validate_manifest_data(manifest: dict[str, Any], strict: bool) -> dict[str, 
 def send(args: argparse.Namespace) -> None:
     require_unsandboxed()
     if not args.dry_run:
-        require_thread_heartbeat_automation_confirmed(args.thread_heartbeat_automation_confirmed)
+        require_thread_heartbeat_automation(args.thread_heartbeat_automation_id)
     if args.prompt_file:
         prompt = Path(args.prompt_file).read_text()
     elif args.prompt:
@@ -1231,7 +1262,7 @@ def manifest_validate(args: argparse.Namespace) -> None:
 
 def dispatch_manifest(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    require_thread_heartbeat_automation_confirmed(args.thread_heartbeat_automation_confirmed)
+    require_thread_heartbeat_automation(args.thread_heartbeat_automation_id)
     with RuntimeLock():
         state = read_state()
         if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
@@ -1330,7 +1361,7 @@ def main() -> int:
     p.add_argument("--group")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
-    p.add_argument("--thread-heartbeat-automation-confirmed", action="store_true")
+    p.add_argument("--thread-heartbeat-automation-id")
     p.set_defaults(func=send)
 
     p = sub.add_parser("status")
@@ -1393,7 +1424,7 @@ def main() -> int:
     p.add_argument("--manifest", required=True)
     p.add_argument("--strict", action="store_true")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--thread-heartbeat-automation-confirmed", action="store_true")
+    p.add_argument("--thread-heartbeat-automation-id")
     p.set_defaults(func=dispatch_manifest)
 
     args = parser.parse_args()
