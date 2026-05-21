@@ -1,10 +1,11 @@
 {
+  "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
   "pid": 76192,
   "started_at": "2026-05-21T06:21:11Z",
-  "status": "running",
-  "updated_at": "2026-05-21T06:21:11Z",
+  "status": "stopped",
+  "updated_at": "2026-05-21T06:30:04Z",
   "workdir": "/private/tmp/claude-delegate-full-parallel-fixture",
   "workers": 3
 }

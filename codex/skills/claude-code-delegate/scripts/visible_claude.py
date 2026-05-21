@@ -29,9 +29,22 @@ LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 DEFAULT_MODEL = "opus"
 MAX_WORKERS = 3
+DEFAULT_MAX_TURNS = 12
+DEFAULT_MAX_THINKING_TOKENS = 4096
+MAX_TOOL_CALLS_PER_TASK = 16
+MAX_READ_CALLS_BEFORE_WRITE = 6
 READ_ONLY_TOOLS = {"Glob", "Grep", "LS", "Read"}
 WRITE_TOOLS = {"Edit", "MultiEdit", "Write"}
 DELEGATE_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
+DELEGATE_SYSTEM_PROMPT = """You are a bounded file-edit worker controlled by Codex.
+
+Execute exactly one delegated task from its task file.
+Do not run shell commands, tests, package managers, servers, git, browsers, MCP, plugins, or subagents.
+Read only the files needed for the task. Prefer the task file, target file, direct dependencies named in the task, and explicit acceptance files.
+Do not perform broad repository exploration.
+Make the requested edit promptly. If the task cannot be completed within the allowed paths, stop and explain why.
+End with a concise summary and the required TASK_DONE marker when the task is complete.
+"""
 TASK_TEMPLATE = """# Claude Delegate Task
 
 ## Objective
@@ -348,12 +361,25 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
 
     worker_file = WORKERS_DIR / f"worker-{worker_id}.json"
     active_task: dict[str, Any] | None = None
+    task_tool_counts: dict[str, int] = {}
+    task_read_counts: dict[str, int] = {}
+    task_write_seen: set[str] = set()
 
     async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
         if tool_name not in DELEGATE_TOOLS:
             return PermissionResultDeny(message=f"{tool_name} is not allowed for claude-code-delegate workers")
         if active_task is None:
             return PermissionResultDeny(message="no active delegated task")
+        task_id = str(active_task["id"])
+        current_tool_count = task_tool_counts.get(task_id, 0)
+        if current_tool_count >= MAX_TOOL_CALLS_PER_TASK:
+            return PermissionResultDeny(message=f"task tool budget exceeded ({MAX_TOOL_CALLS_PER_TASK})")
+        if tool_name in READ_ONLY_TOOLS and task_id not in task_write_seen:
+            current_read_count = task_read_counts.get(task_id, 0)
+            if current_read_count >= MAX_READ_CALLS_BEFORE_WRITE:
+                return PermissionResultDeny(
+                    message=f"pre-edit read budget exceeded ({MAX_READ_CALLS_BEFORE_WRITE}); edit or stop"
+                )
         file_path = tool_scope_path(tool_name, tool_input, workdir)
         if not file_path:
             return PermissionResultDeny(message=f"{tool_name} requires a file path")
@@ -361,42 +387,63 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
             read_paths = list(active_task.get("read_paths") or [workdir])
             read_paths.append(str(active_task["task_file"]))
             if path_allowed(file_path, read_paths, workdir):
+                task_tool_counts[task_id] = current_tool_count + 1
+                task_read_counts[task_id] = task_read_counts.get(task_id, 0) + 1
                 return PermissionResultAllow()
             return PermissionResultDeny(message=f"{tool_name} path is outside delegated read scope: {file_path}")
         write_paths = list(active_task.get("write_paths") or [workdir])
         if path_allowed(file_path, write_paths, workdir):
+            task_tool_counts[task_id] = current_tool_count + 1
+            task_write_seen.add(task_id)
             return PermissionResultAllow()
         return PermissionResultDeny(message=f"{tool_name} path is outside delegated write scope: {file_path}")
 
-    options = ClaudeAgentOptions(
-        cwd=workdir,
-        model=model,
-        tools=sorted(DELEGATE_TOOLS),
-        permission_mode="acceptEdits",
-        allowed_tools=sorted(DELEGATE_TOOLS),
-        can_use_tool=can_use_tool,
-        mcp_servers={},
-        strict_mcp_config=True,
-        plugins=[],
-        skills=[],
-        agents={},
-        setting_sources=[],
-        add_dirs=["/private/tmp"],
-    )
     write_json(worker_file, {"id": worker_id, "status": "connecting", "updated_at": now_iso()})
-    async with ClaudeSDKClient(options=options) as client:
-        write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
-        while not stop_event.is_set():
-            try:
-                task_id = await asyncio.wait_for(queue.get(), timeout=0.5)
-            except asyncio.TimeoutError:
-                continue
-            try:
-                task = read_json(task_status_path(task_id))
-                active_task = task
-                task = update_task(task, "running", worker_id=worker_id, started_at=now_iso())
-                active_task = task
-                write_json(worker_file, {"id": worker_id, "status": "running", "task_id": task_id, "updated_at": now_iso()})
+    write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
+    while not stop_event.is_set():
+        try:
+            task_id = await asyncio.wait_for(queue.get(), timeout=0.5)
+        except asyncio.TimeoutError:
+            continue
+        try:
+            task = read_json(task_status_path(task_id))
+            active_task = task
+            task_tool_counts[task_id] = 0
+            task_read_counts[task_id] = 0
+            task_write_seen.discard(task_id)
+            task = update_task(
+                task,
+                "running",
+                worker_id=worker_id,
+                started_at=now_iso(),
+                session_policy="isolated-per-task",
+                max_turns=DEFAULT_MAX_TURNS,
+                max_thinking_tokens=DEFAULT_MAX_THINKING_TOKENS,
+                max_tool_calls=MAX_TOOL_CALLS_PER_TASK,
+                max_read_calls_before_write=MAX_READ_CALLS_BEFORE_WRITE,
+            )
+            active_task = task
+            write_json(worker_file, {"id": worker_id, "status": "running", "task_id": task_id, "updated_at": now_iso()})
+            options = ClaudeAgentOptions(
+                cwd=workdir,
+                model=model,
+                tools=sorted(DELEGATE_TOOLS),
+                system_prompt=DELEGATE_SYSTEM_PROMPT,
+                permission_mode="acceptEdits",
+                allowed_tools=sorted(DELEGATE_TOOLS),
+                can_use_tool=can_use_tool,
+                mcp_servers={},
+                strict_mcp_config=True,
+                plugins=[],
+                skills=[],
+                agents={},
+                setting_sources=[],
+                add_dirs=["/private/tmp"],
+                continue_conversation=False,
+                max_turns=DEFAULT_MAX_TURNS,
+                max_thinking_tokens=DEFAULT_MAX_THINKING_TOKENS,
+            )
+            async with ClaudeSDKClient(options=options) as client:
                 await client.query(dispatch_prompt(task))
                 result: dict[str, Any] | None = None
                 async for message in client.receive_response():
@@ -410,17 +457,20 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                     update_task(task, "done", result=result, session_id=result.get("session_id"))
                 else:
                     update_task(task, "failed", result=result or {"error": "no ResultMessage received"})
-            except Exception as exc:
-                try:
-                    task = read_json(task_status_path(task_id))
-                    update_task(task, "failed", error=repr(exc))
-                except Exception:
-                    append_jsonl(LOGS_DIR / "daemon-errors.jsonl", {"timestamp": now_iso(), "task_id": task_id, "error": repr(exc)})
-            finally:
-                active_task = None
-                queue_item_path(task_id).unlink(missing_ok=True)
-                queue.task_done()
-                write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
+        except Exception as exc:
+            try:
+                task = read_json(task_status_path(task_id))
+                update_task(task, "failed", error=repr(exc))
+            except Exception:
+                append_jsonl(LOGS_DIR / "daemon-errors.jsonl", {"timestamp": now_iso(), "task_id": task_id, "error": repr(exc)})
+        finally:
+            active_task = None
+            task_tool_counts.pop(task_id, None)
+            task_read_counts.pop(task_id, None)
+            task_write_seen.discard(task_id)
+            queue_item_path(task_id).unlink(missing_ok=True)
+            queue.task_done()
+            write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
 
 
 async def enqueue_loop(queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
