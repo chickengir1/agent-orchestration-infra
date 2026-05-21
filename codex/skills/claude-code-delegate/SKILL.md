@@ -142,4 +142,4 @@ Do not ask Claude delegate workers to run tests or commands. Delegate workers ar
 Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate work.
 The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
 
-The SDK worker must be tool-isolated. It starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only `Read`, `Edit`, `MultiEdit`, and `Write` within the task's recorded read/write paths.
+The SDK worker must be tool-isolated. It starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) within recorded read paths and edit tools (`Edit`, `MultiEdit`, `Write`) within recorded write paths.

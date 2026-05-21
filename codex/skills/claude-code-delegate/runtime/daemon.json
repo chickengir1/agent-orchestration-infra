@@ -1,10 +1,11 @@
 {
+  "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
-  "pid": 40174,
-  "started_at": "2026-05-21T05:57:17Z",
-  "status": "running",
-  "updated_at": "2026-05-21T05:57:17Z",
-  "workdir": "/private/tmp/claude-delegate-opus-big-fixture",
+  "pid": 55365,
+  "started_at": "2026-05-21T06:08:19Z",
+  "status": "stopped",
+  "updated_at": "2026-05-21T06:11:00Z",
+  "workdir": "/private/tmp/claude-delegate-opus-isolated-fixture",
   "workers": 1
 }

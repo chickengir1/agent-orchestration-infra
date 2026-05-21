@@ -28,7 +28,9 @@ WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 DEFAULT_MODEL = "opus"
-DELEGATE_TOOLS = {"Read", "Edit", "MultiEdit", "Write"}
+READ_ONLY_TOOLS = {"Glob", "Grep", "LS", "Read"}
+WRITE_TOOLS = {"Edit", "MultiEdit", "Write"}
+DELEGATE_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
 
 
 def now_iso() -> str:
@@ -266,14 +268,16 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
         if active_task is None:
             return PermissionResultDeny(message="no active delegated task")
         file_path = tool_file_path(tool_input)
+        if tool_name in {"Glob", "Grep"} and not file_path:
+            file_path = workdir
         if not file_path:
             return PermissionResultDeny(message=f"{tool_name} requires a file path")
-        if tool_name == "Read":
+        if tool_name in READ_ONLY_TOOLS:
             read_paths = list(active_task.get("read_paths") or [workdir])
             read_paths.append(str(active_task["task_file"]))
             if path_allowed(file_path, read_paths, workdir):
                 return PermissionResultAllow()
-            return PermissionResultDeny(message=f"Read path is outside delegated scope: {file_path}")
+            return PermissionResultDeny(message=f"{tool_name} path is outside delegated read scope: {file_path}")
         write_paths = list(active_task.get("write_paths") or [workdir])
         if path_allowed(file_path, write_paths, workdir):
             return PermissionResultAllow()
@@ -596,6 +600,9 @@ def stop(args: argparse.Namespace) -> None:
                 time.sleep(0.2)
             if process_alive(info.get("pid")):
                 os.kill(int(info["pid"]), signal.SIGTERM)
+        if info:
+            daemon_state = {**info, "alive": False, "status": "stopped", "updated_at": now_iso()}
+            write_json(DAEMON_FILE, daemon_state)
         if STATE_FILE.exists():
             state = read_json(STATE_FILE)
             state.update({"status": "stopped", "stopped_at": now_iso(), "daemon_alive": False})
