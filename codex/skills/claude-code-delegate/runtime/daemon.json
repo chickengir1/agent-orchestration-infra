@@ -2,10 +2,10 @@
   "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
-  "pid": 13762,
-  "started_at": "2026-05-21T07:45:44Z",
+  "pid": 37444,
+  "started_at": "2026-05-21T08:00:28Z",
   "status": "stopped",
-  "updated_at": "2026-05-21T07:46:07Z",
-  "workdir": "/private/tmp/claude-delegate-send-race-smoke",
+  "updated_at": "2026-05-21T08:01:06Z",
+  "workdir": "/private/tmp/claude-delegate-manifest-smoke",
   "workers": 3
 }

@@ -30,6 +30,17 @@ WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 ACTIVE_TASK_STATES = {"created", "queued", "running"}
+MANIFEST_SCHEMA_VERSION = 1
+REQUIRED_TASK_SECTIONS = [
+    "Objective",
+    "Allowed Read Paths",
+    "Allowed Write Paths",
+    "Forbidden",
+    "Required Changes",
+    "Acceptance Contract",
+    "Stop Conditions",
+    "Final Response",
+]
 DEFAULT_MODEL = "opus"
 MAX_WORKERS = 3
 DEFAULT_MAX_TURNS = 12
@@ -291,6 +302,60 @@ def update_task(task: dict[str, Any], status: str, **extra: Any) -> dict[str, An
     write_json(task_status_path(updated["id"]), updated)
     append_jsonl(task_events_path(updated["id"]), {"type": "task_status", "timestamp": updated["updated_at"], "status": status})
     return updated
+
+
+def markdown_sections(text: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections.setdefault(current, [])
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return {name: "\n".join(lines).strip() for name, lines in sections.items()}
+
+
+def validate_task_contract(
+    prompt_file: str,
+    read_paths: list[str] | None,
+    write_paths: list[str] | None,
+    workdir: str,
+    strict: bool,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    prompt_path = resolve_in_workdir(prompt_file, workdir)
+    if not prompt_path.exists():
+        return {"ok": False, "errors": [f"prompt file missing: {prompt_path}"], "warnings": warnings}
+    text = prompt_path.read_text()
+    sections = markdown_sections(text)
+    for section in REQUIRED_TASK_SECTIONS:
+        if not sections.get(section):
+            errors.append(f"missing required section: {section}")
+    if "TASK_DONE" not in text:
+        errors.append("Final Response must require TASK_DONE")
+    if not read_paths:
+        errors.append("at least one --read-path is required")
+    if not write_paths:
+        errors.append("at least one --write-path is required")
+    for path in read_paths or []:
+        resolved = str(resolve_in_workdir(path, workdir))
+        if resolved not in sections.get("Allowed Read Paths", "") and resolved not in sections.get("Allowed Write Paths", ""):
+            errors.append(f"read path is not listed in task file: {resolved}")
+    for path in write_paths or []:
+        resolved = str(resolve_in_workdir(path, workdir))
+        if resolved not in sections.get("Allowed Write Paths", ""):
+            errors.append(f"write path is not listed in task file: {resolved}")
+    forbidden = sections.get("Forbidden", "")
+    if "Do not run" not in forbidden and "do not run" not in forbidden:
+        warnings.append("Forbidden section should explicitly prohibit commands/tests/tools")
+    if strict and read_paths and any(str(resolve_in_workdir(path, workdir)) == str(resolve_in_workdir(workdir, workdir)) for path in read_paths):
+        errors.append("strict mode rejects workdir-wide read ownership")
+    if strict and write_paths and any(str(resolve_in_workdir(path, workdir)) == str(resolve_in_workdir(workdir, workdir)) for path in write_paths):
+        errors.append("strict mode rejects workdir-wide write ownership")
+    return {"ok": not errors, "errors": errors, "warnings": warnings}
 
 
 def task_id_for(prompt: str, workdir: str, force_new: bool = False) -> str:
@@ -753,6 +818,87 @@ def create_task(
     return task_id, task
 
 
+def read_manifest(path: str, workdir: str | None = None) -> dict[str, Any]:
+    manifest_path = Path(path).expanduser()
+    if not manifest_path.is_absolute() and workdir:
+        manifest_path = Path(workdir) / manifest_path
+    return read_json(manifest_path.resolve(strict=False))
+
+
+def write_manifest(path: str, manifest: dict[str, Any], workdir: str | None = None) -> None:
+    manifest_path = Path(path).expanduser()
+    if not manifest_path.is_absolute() and workdir:
+        manifest_path = Path(workdir) / manifest_path
+    write_json(manifest_path.resolve(strict=False), manifest)
+
+
+def manifest_task_by_id(manifest: dict[str, Any], task_id: str) -> dict[str, Any] | None:
+    return next((task for task in manifest.get("tasks") or [] if task.get("id") == task_id), None)
+
+
+def validate_manifest_data(manifest: dict[str, Any], strict: bool) -> dict[str, Any]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        errors.append(f"unsupported manifest schema_version: {manifest.get('schema_version')}")
+    workdir = manifest.get("workdir")
+    if not workdir:
+        errors.append("manifest missing workdir")
+        workdir = os.getcwd()
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        errors.append("manifest must contain at least one task")
+        tasks = []
+    seen_ids: set[str] = set()
+    for index, task in enumerate(tasks):
+        task_id = task.get("id")
+        if not task_id:
+            errors.append(f"task[{index}] missing id")
+            continue
+        if task_id in seen_ids:
+            errors.append(f"duplicate manifest task id: {task_id}")
+        seen_ids.add(task_id)
+        prompt_file = task.get("prompt_file")
+        if not prompt_file:
+            errors.append(f"{task_id}: missing prompt_file")
+            continue
+        result = validate_task_contract(
+            prompt_file,
+            task.get("read_paths") or [],
+            task.get("write_paths") or [],
+            workdir,
+            strict,
+        )
+        errors.extend(f"{task_id}: {item}" for item in result["errors"])
+        warnings.extend(f"{task_id}: {item}" for item in result["warnings"])
+    for task in tasks:
+        task_id = task.get("id")
+        dependencies = set(task.get("depends_on") or [])
+        for dep_id in dependencies:
+            if dep_id not in seen_ids:
+                errors.append(f"{task_id}: missing manifest dependency: {dep_id}")
+    for left_index, left in enumerate(tasks):
+        left_id = left.get("id")
+        if not left_id:
+            continue
+        for right in tasks[left_index + 1 :]:
+            right_id = right.get("id")
+            if not right_id:
+                continue
+            left_deps = set(left.get("depends_on") or [])
+            right_deps = set(right.get("depends_on") or [])
+            if left_id in right_deps or right_id in left_deps:
+                continue
+            for left_path in left.get("write_paths") or []:
+                for right_path in right.get("write_paths") or []:
+                    if paths_overlap(str(left_path), str(right_path), workdir):
+                        errors.append(f"write path overlap without dependency: {left_id} <-> {right_id}: {left_path} / {right_path}")
+                        break
+                if errors and errors[-1].startswith("write path overlap"):
+                    break
+    return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
 def send(args: argparse.Namespace) -> None:
     require_unsandboxed()
     if args.prompt_file:
@@ -954,6 +1100,135 @@ def template(args: argparse.Namespace) -> None:
     print(TASK_TEMPLATE.rstrip())
 
 
+def validate_task(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    result = validate_task_contract(args.prompt_file, args.read_path, args.write_path, args.workdir, args.strict)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if not result["ok"]:
+        raise SystemExit(1)
+
+
+def manifest_init(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "workdir": str(resolve_in_workdir(args.workdir, args.workdir)),
+        "group": args.group,
+        "tasks": [],
+    }
+    write_manifest(args.out, manifest)
+    print(f"manifest={args.out}")
+
+
+def manifest_add(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    manifest = read_manifest(args.manifest)
+    workdir = manifest.get("workdir") or os.getcwd()
+    task_id = args.id
+    if manifest_task_by_id(manifest, task_id):
+        raise SystemExit(f"manifest task already exists: {task_id}")
+    task = {
+        "id": task_id,
+        "label": args.label or task_id,
+        "task_kind": args.task_kind,
+        "prompt_file": str(resolve_in_workdir(args.prompt_file, workdir)),
+        "read_paths": [str(resolve_in_workdir(path, workdir)) for path in args.read_path],
+        "write_paths": [str(resolve_in_workdir(path, workdir)) for path in args.write_path],
+        "depends_on": args.depends_on or [],
+        "verify_cmds": args.verify_cmd or [],
+    }
+    manifest.setdefault("tasks", []).append(task)
+    manifest["updated_at"] = now_iso()
+    write_manifest(args.manifest, manifest)
+    print(f"added={task_id}")
+
+
+def manifest_validate(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    manifest = read_manifest(args.manifest)
+    result = validate_manifest_data(manifest, args.strict)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if not result["ok"]:
+        raise SystemExit(1)
+
+
+def dispatch_manifest(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    with RuntimeLock():
+        state = read_state()
+        if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
+            raise SystemExit("Claude SDK worker runtime is not ready; run start first")
+        info = daemon_info()
+        if not info or not info.get("alive"):
+            raise SystemExit("Claude SDK worker daemon is not running; run start")
+        manifest = read_manifest(args.manifest)
+        validation = validate_manifest_data(manifest, args.strict)
+        if not validation["ok"]:
+            print(json.dumps(validation, indent=2, sort_keys=True))
+            raise SystemExit(1)
+        if manifest.get("workdir") != state.get("workdir"):
+            raise SystemExit(f"manifest workdir does not match active runtime: {manifest.get('workdir')} != {state.get('workdir')}")
+        runtime_ids: dict[str, str] = {
+            task["id"]: task["runtime_task_id"]
+            for task in manifest.get("tasks") or []
+            if task.get("runtime_task_id")
+        }
+        dispatched: list[dict[str, Any]] = []
+        for manifest_task in manifest.get("tasks") or []:
+            manifest_id = manifest_task["id"]
+            if manifest_task.get("runtime_task_id") and not args.force:
+                dispatched.append({"id": manifest_id, "runtime_task_id": manifest_task["runtime_task_id"], "status": "already-dispatched"})
+                continue
+            missing_deps = [dep for dep in manifest_task.get("depends_on") or [] if dep not in runtime_ids]
+            if missing_deps:
+                raise SystemExit(f"{manifest_id}: dependencies are not dispatched yet: {', '.join(missing_deps)}")
+            runtime_dep_ids = [runtime_ids[dep] for dep in manifest_task.get("depends_on") or []]
+            prompt = Path(manifest_task["prompt_file"]).read_text()
+            prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            existing = existing_task_for(prompt_sha256, state["workdir"])
+            if existing and not args.force:
+                runtime_ids[manifest_id] = existing["id"]
+                manifest_task["runtime_task_id"] = existing["id"]
+                manifest_task["dispatched_at"] = manifest_task.get("dispatched_at") or now_iso()
+                dispatched.append({"id": manifest_id, "runtime_task_id": existing["id"], "status": existing.get("status"), "existing": True})
+                continue
+            conflicts = active_write_conflicts(manifest_task.get("write_paths") or [], runtime_dep_ids, state["workdir"])
+            if conflicts:
+                raise SystemExit(f"{manifest_id}: overlapping active write paths: {', '.join(conflicts)}")
+            task_id, task = create_task(
+                state,
+                prompt,
+                args.force,
+                manifest_task.get("read_paths") or [],
+                manifest_task.get("write_paths") or [],
+                runtime_dep_ids,
+                manifest_task.get("label") or manifest_id,
+                manifest.get("group"),
+            )
+            queued_order = now_order()
+            task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order, manifest_id=manifest_id)
+            write_json(
+                queue_item_path(task_id),
+                {
+                    "task_id": task_id,
+                    "queued_at": task["updated_at"],
+                    "queued_order": queued_order,
+                    "depends_on": task.get("depends_on") or [],
+                },
+            )
+            state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
+            runtime_ids[manifest_id] = task_id
+            manifest_task["runtime_task_id"] = task_id
+            manifest_task["dispatched_at"] = now_iso()
+            dispatched.append({"id": manifest_id, "runtime_task_id": task_id, "status": "queued"})
+        manifest["updated_at"] = now_iso()
+        write_manifest(args.manifest, manifest)
+        write_state(state)
+    print(json.dumps({"dispatched": dispatched, "manifest": args.manifest}, indent=2, sort_keys=True))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1002,6 +1277,46 @@ def main() -> int:
 
     p = sub.add_parser("template")
     p.set_defaults(func=template)
+
+    p = sub.add_parser("validate-task")
+    p.add_argument("--workdir", default=os.getcwd())
+    p.add_argument("--prompt-file", required=True)
+    p.add_argument("--read-path", action="append", required=True)
+    p.add_argument("--write-path", action="append", required=True)
+    p.add_argument("--strict", action="store_true")
+    p.set_defaults(func=validate_task)
+
+    p = sub.add_parser("manifest")
+    manifest_sub = p.add_subparsers(dest="manifest_cmd", required=True)
+
+    mp = manifest_sub.add_parser("init")
+    mp.add_argument("--workdir", default=os.getcwd())
+    mp.add_argument("--group", required=True)
+    mp.add_argument("--out", required=True)
+    mp.set_defaults(func=manifest_init)
+
+    mp = manifest_sub.add_parser("add")
+    mp.add_argument("--manifest", required=True)
+    mp.add_argument("--id", required=True)
+    mp.add_argument("--label")
+    mp.add_argument("--task-kind", default="edit", choices=["discovery", "edit", "test-edit", "integration"])
+    mp.add_argument("--prompt-file", required=True)
+    mp.add_argument("--read-path", action="append", required=True)
+    mp.add_argument("--write-path", action="append", required=True)
+    mp.add_argument("--depends-on", action="append")
+    mp.add_argument("--verify-cmd", action="append")
+    mp.set_defaults(func=manifest_add)
+
+    mp = manifest_sub.add_parser("validate")
+    mp.add_argument("--manifest", required=True)
+    mp.add_argument("--strict", action="store_true")
+    mp.set_defaults(func=manifest_validate)
+
+    p = sub.add_parser("dispatch")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--strict", action="store_true")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=dispatch_manifest)
 
     args = parser.parse_args()
     args.func(args)

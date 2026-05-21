@@ -70,15 +70,17 @@ Default large-change loop:
 
 1. Codex performs read-only investigation and identifies exact files.
 2. Codex decomposes the target into source slices, test slices, and integration slices. Each task should own one small write set.
-3. Start up to 3 workers.
-4. Dispatch independent tasks in parallel with `send`.
-5. Dispatch follow-up tasks with `--depends-on <task-id>` so they run only after dependencies are `done`.
-6. Continue local Codex work or discussion without waiting.
-7. Run `status --include-workers` at checkpoints.
-8. For `done` tasks, inspect and verify artifacts directly with Codex.
-9. For `failed` tasks, inspect events and split smaller; do not resend the same broad task.
-10. Integrate or correct the result.
-11. Stop workers or remove reviewed task records when appropriate.
+3. Create a manifest for the checkpoint.
+4. Add every task to the manifest with exact read paths, write paths, dependencies, and Codex-owned verification commands.
+5. Validate the manifest in strict mode.
+6. Start up to 3 workers.
+7. Dispatch the manifest. Do not manually dispatch broad or unvalidated tasks for large work.
+8. Continue local Codex work or discussion without waiting.
+9. Run `status --include-workers` at checkpoints.
+10. For `done` tasks, inspect and verify artifacts directly with Codex.
+11. For `failed` tasks, inspect events and split smaller; do not resend the same broad task.
+12. Integrate or correct the result.
+13. Stop workers or remove reviewed task records when appropriate.
 
 Do not use Claude output as final verification. Claude may produce useful work, but Codex owns the final correctness decision.
 
@@ -109,7 +111,20 @@ Use `--clean-runtime` only when intentionally discarding the skill runtime's tra
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py template > /absolute/path/to/task.md
 ```
 
-4. Send a bounded task.
+4. Validate a bounded task before dispatch.
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py validate-task \
+  --workdir "$(pwd)" \
+  --prompt-file /absolute/path/to/task.md \
+  --read-path "$(pwd)/src/module-a.ts" \
+  --write-path "$(pwd)/src/module-a.ts" \
+  --strict
+```
+
+`validate-task` checks required task sections, exact read/write path declarations in the task file, `TASK_DONE`, and rejects workdir-wide ownership in strict mode.
+
+5. For one-off bounded work, send a bounded task.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send \
@@ -140,7 +155,34 @@ Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default
 Use `--depends-on` to connect tasks. A dependent task stays queued until every dependency is `done`. If any dependency reaches a terminal non-`done` state or is missing, the dependent task becomes `failed`; it is not retried or auto-rerouted.
 After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
 
-5. Check status.
+6. For large work, use a manifest instead of direct `send`.
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py manifest init \
+  --workdir "$(pwd)" \
+  --group "checkpoint-8" \
+  --out /absolute/path/to/checkpoint-8.manifest.json
+
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py manifest add \
+  --manifest /absolute/path/to/checkpoint-8.manifest.json \
+  --id module-a-api \
+  --prompt-file /absolute/path/to/module-a.md \
+  --read-path "$(pwd)/src/module-a.ts" \
+  --write-path "$(pwd)/src/module-a.ts" \
+  --verify-cmd "npm test -- module-a"
+
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py manifest validate \
+  --manifest /absolute/path/to/checkpoint-8.manifest.json \
+  --strict
+
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py dispatch \
+  --manifest /absolute/path/to/checkpoint-8.manifest.json \
+  --strict
+```
+
+Manifest dependencies use manifest task ids. `dispatch` translates them to runtime task ids and records `runtime_task_id` back into the manifest. Manifest validation rejects overlapping write paths unless the tasks have an explicit dependency edge.
+
+7. Check status.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-workers
@@ -172,11 +214,11 @@ Running task records also include the enforced session and guard fields:
 - `max_discovery_calls_before_write`
 - `max_post_write_read_calls`
 
-6. Inspect and verify.
+8. Inspect and verify.
 
 Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Codex runs tests when appropriate. Claude's result is not treated as verification by itself.
 
-7. Stop workers or remove task records when appropriate.
+9. Stop workers or remove task records when appropriate.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop --workers
