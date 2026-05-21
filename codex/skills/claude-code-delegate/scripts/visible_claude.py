@@ -28,9 +28,46 @@ WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 DEFAULT_MODEL = "opus"
+MAX_WORKERS = 3
 READ_ONLY_TOOLS = {"Glob", "Grep", "LS", "Read"}
 WRITE_TOOLS = {"Edit", "MultiEdit", "Write"}
 DELEGATE_TOOLS = READ_ONLY_TOOLS | WRITE_TOOLS
+TASK_TEMPLATE = """# Claude Delegate Task
+
+## Objective
+- One narrow, independently reviewable change.
+
+## Context
+- What Claude needs to know before editing.
+- Mention related task ids if this task depends on previous Claude work.
+
+## Allowed Read Paths
+- /absolute/path/or/workdir-relative/path
+
+## Allowed Write Paths
+- /absolute/path/or/workdir-relative/path
+
+## Forbidden
+- Do not edit tests unless this task explicitly owns tests.
+- Do not run shell commands, tests, package managers, servers, git, browsers, MCP, or external tools.
+- Do not broaden scope.
+
+## Required Changes
+- Small bullet 1.
+- Small bullet 2.
+
+## Acceptance Contract
+- What Codex will verify after completion.
+- Expected files/functions/exports.
+
+## Stop Conditions
+- Stop if required files are missing.
+- Stop if the requested change requires editing outside allowed write paths.
+
+## Final Response
+- Summarize changed files.
+- Include TASK_DONE.
+"""
 
 
 def now_iso() -> str:
@@ -49,6 +86,11 @@ def require_unsandboxed() -> None:
 def require_opus(model: str) -> None:
     if model != DEFAULT_MODEL:
         raise SystemExit("claude-code-delegate workers must use opus; restart with --model opus")
+
+
+def require_worker_count(workers: int) -> None:
+    if workers < 1 or workers > MAX_WORKERS:
+        raise SystemExit(f"claude-code-delegate supports 1..{MAX_WORKERS} workers; requested {workers}")
 
 
 def normalize_prompt_arg(prompt: str) -> str:
@@ -140,6 +182,26 @@ def tool_file_path(tool_input: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+def glob_base_path(pattern: str, workdir: str) -> str:
+    wildcard_positions = [position for marker in ("*", "?", "[") if (position := pattern.find(marker)) != -1]
+    if wildcard_positions:
+        base = pattern[: min(wildcard_positions)].rstrip("/")
+        return base or workdir
+    return pattern or workdir
+
+
+def tool_scope_path(tool_name: str, tool_input: dict[str, Any], workdir: str) -> str | None:
+    file_path = tool_file_path(tool_input)
+    if file_path:
+        return file_path
+    pattern = tool_input.get("pattern")
+    if tool_name == "Glob" and pattern:
+        return glob_base_path(str(pattern), workdir)
+    if tool_name == "Grep":
+        return workdir
+    return None
+
+
 def list_tasks() -> list[dict[str, Any]]:
     if not TASKS_DIR.exists():
         return []
@@ -150,6 +212,28 @@ def list_tasks() -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
     return tasks
+
+
+def task_by_id(tasks: list[dict[str, Any]], task_id: str) -> dict[str, Any] | None:
+    return next((task for task in tasks if task.get("id") == task_id), None)
+
+
+def dependency_blockers(task: dict[str, Any], tasks: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    pending: list[str] = []
+    failed: list[str] = []
+    for dep_id in task.get("depends_on") or []:
+        dep = task_by_id(tasks, dep_id)
+        if not dep:
+            failed.append(f"{dep_id}:missing")
+            continue
+        dep_status = dep.get("status")
+        if dep_status == "done":
+            continue
+        if dep_status in TERMINAL_TASK_STATES:
+            failed.append(f"{dep_id}:{dep_status}")
+        else:
+            pending.append(f"{dep_id}:{dep_status}")
+    return pending, failed
 
 
 def update_task(task: dict[str, Any], status: str, **extra: Any) -> dict[str, Any]:
@@ -246,6 +330,9 @@ def message_to_dict(message: Any) -> dict[str, Any]:
 def dispatch_prompt(task: dict[str, Any]) -> str:
     return (
         f"Codex delegated task {task['id']}.\n"
+        f"Label: {task.get('label') or 'unlabeled'}.\n"
+        f"Group: {task.get('group') or 'default'}.\n"
+        f"Depends on: {json.dumps(task.get('depends_on') or [], sort_keys=True)}.\n"
         f"Read the task file at {task['task_file']} and execute it exactly.\n"
         f"Machine-enforced read paths: {json.dumps(task.get('read_paths') or [], sort_keys=True)}.\n"
         f"Machine-enforced write paths: {json.dumps(task.get('write_paths') or [], sort_keys=True)}.\n"
@@ -267,9 +354,7 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
             return PermissionResultDeny(message=f"{tool_name} is not allowed for claude-code-delegate workers")
         if active_task is None:
             return PermissionResultDeny(message="no active delegated task")
-        file_path = tool_file_path(tool_input)
-        if tool_name in {"Glob", "Grep"} and not file_path:
-            file_path = workdir
+        file_path = tool_scope_path(tool_name, tool_input, workdir)
         if not file_path:
             return PermissionResultDeny(message=f"{tool_name} requires a file path")
         if tool_name in READ_ONLY_TOOLS:
@@ -342,6 +427,7 @@ async def enqueue_loop(queue: asyncio.Queue[str], stop_event: asyncio.Event) -> 
     scheduled: set[str] = set()
     while not stop_event.is_set():
         candidates: list[tuple[str, str]] = []
+        tasks = list_tasks()
         for path in QUEUE_DIR.glob("*.json"):
             task_id = path.stem
             if task_id in scheduled:
@@ -351,6 +437,18 @@ async def enqueue_loop(queue: asyncio.Queue[str], stop_event: asyncio.Event) -> 
             except (OSError, json.JSONDecodeError):
                 continue
             if task.get("status") == "queued":
+                pending, failed = dependency_blockers(task, tasks)
+                if failed:
+                    queue_item_path(task_id).unlink(missing_ok=True)
+                    update_task(task, "failed", dependency_failed=True, dependency_errors=failed)
+                    continue
+                if pending:
+                    task["blocked_by"] = pending
+                    write_json(task_status_path(task_id), task)
+                    continue
+                if task.get("blocked_by"):
+                    task.pop("blocked_by", None)
+                    write_json(task_status_path(task_id), task)
                 candidates.append((str(task.get("queued_order") or task.get("queued_at") or task.get("created_at") or ""), task_id))
         for _, task_id in sorted(candidates):
             if task_id not in scheduled:
@@ -404,6 +502,7 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
 
 def start(args: argparse.Namespace) -> None:
     require_opus(args.model)
+    require_worker_count(args.workers)
     preflight = run_preflight(args.workdir)
     info = daemon_info()
     if info and info.get("alive"):
@@ -452,7 +551,16 @@ def start(args: argparse.Namespace) -> None:
     print(f"state={STATE_FILE}")
 
 
-def create_task(state: dict[str, Any], prompt: str, force_new: bool, read_paths: list[str] | None, write_paths: list[str] | None) -> tuple[str, dict[str, Any]]:
+def create_task(
+    state: dict[str, Any],
+    prompt: str,
+    force_new: bool,
+    read_paths: list[str] | None,
+    write_paths: list[str] | None,
+    depends_on: list[str] | None,
+    label: str | None,
+    group: str | None,
+) -> tuple[str, dict[str, Any]]:
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if not force_new:
         existing = existing_task_for(prompt_sha256, state["workdir"])
@@ -476,6 +584,9 @@ def create_task(state: dict[str, Any], prompt: str, force_new: bool, read_paths:
         "transport": "claude-agent-sdk-worker",
         "read_paths": read_paths or [state["workdir"]],
         "write_paths": write_paths or [state["workdir"]],
+        "depends_on": depends_on or [],
+        "label": label,
+        "group": group,
     }
     write_json(task_status_path(task_id), task)
     append_jsonl(task_events_path(task_id), {"type": "task_status", "timestamp": task["created_at"], "status": "created"})
@@ -496,13 +607,21 @@ def send(args: argparse.Namespace) -> None:
         prompt = normalize_prompt_arg(args.prompt)
     else:
         raise SystemExit("send requires a prompt argument or --prompt-file")
-    task_id, task = create_task(state, prompt, args.force_new, args.read_path, args.write_path)
+    task_id, task = create_task(state, prompt, args.force_new, args.read_path, args.write_path, args.depends_on, args.label, args.group)
     if args.dry_run:
         task = update_task(task, "dry-run", dry_run=True)
     else:
         queued_order = now_order()
         task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order)
-        write_json(queue_item_path(task_id), {"task_id": task_id, "queued_at": task["updated_at"], "queued_order": queued_order})
+        write_json(
+            queue_item_path(task_id),
+            {
+                "task_id": task_id,
+                "queued_at": task["updated_at"],
+                "queued_order": queued_order,
+                "depends_on": task.get("depends_on") or [],
+            },
+        )
     state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
     write_state(state)
     print(f"task_id={task_id}")
@@ -532,7 +651,11 @@ def summarize_task(task: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in {
             "id": task.get("id"),
+            "label": task.get("label"),
+            "group": task.get("group"),
             "status": task.get("status"),
+            "depends_on": task.get("depends_on"),
+            "blocked_by": task.get("blocked_by"),
             "worker_id": task.get("worker_id"),
             "session_id": task.get("session_id"),
             "created_at": task.get("created_at"),
@@ -631,7 +754,12 @@ def preflight(args: argparse.Namespace) -> None:
 
 def daemon(args: argparse.Namespace) -> None:
     require_opus(args.model)
+    require_worker_count(args.workers)
     asyncio.run(daemon_main_async(args))
+
+
+def template(args: argparse.Namespace) -> None:
+    print(TASK_TEMPLATE.rstrip())
 
 
 def main() -> int:
@@ -644,7 +772,7 @@ def main() -> int:
 
     p = sub.add_parser("start")
     p.add_argument("--workdir", default=os.getcwd())
-    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--workers", type=int, default=MAX_WORKERS)
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--clean-runtime", action="store_true")
     p.set_defaults(func=start)
@@ -654,6 +782,9 @@ def main() -> int:
     p.add_argument("--prompt-file")
     p.add_argument("--read-path", action="append")
     p.add_argument("--write-path", action="append")
+    p.add_argument("--depends-on", action="append")
+    p.add_argument("--label")
+    p.add_argument("--group")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
     p.set_defaults(func=send)
@@ -676,6 +807,9 @@ def main() -> int:
     p.add_argument("--workers", type=int, required=True)
     p.add_argument("--model", required=True)
     p.set_defaults(func=daemon)
+
+    p = sub.add_parser("template")
+    p.set_defaults(func=template)
 
     args = parser.parse_args()
     args.func(args)

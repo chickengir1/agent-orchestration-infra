@@ -27,18 +27,21 @@ Do not run this skill inside the Codex sandbox. It controls local worker process
 
 ## Operating Model
 
-Use Claude as a warm bounded background worker. Codex remains the orchestrator, reviewer, integrator, and verifier.
+Use Claude as a warm bounded background worker pool. Codex remains the orchestrator, reviewer, integrator, and verifier.
 
 `start` launches a local daemon. The daemon keeps one or more `ClaudeSDKClient` workers connected, so `send` only writes a task file and enqueues it. `send` returns immediately; completion is discovered later by explicit `status` checkpoints.
 
-Claude workers are edit-only by default. They may read and modify files through `Read`, `Edit`, `MultiEdit`, and `Write`. They must not run tests, shell commands, package managers, servers, git commands, or browser automation. Codex performs all verification after Claude returns.
+Claude workers are bounded edit workers. They may use read-only discovery tools inside recorded read paths and edit tools inside recorded write paths. They must not run tests, shell commands, package managers, servers, git commands, browser automation, MCP tools, or plugin tools. Codex performs all verification after Claude returns.
 
-For substantial changes, do not send one broad task. Split work into bounded tasks with:
+For substantial changes, do not send one broad task. Split work into the smallest independently reviewable tasks. Prefer 3 parallel workers when tasks have disjoint write paths.
 
-- narrow objective
-- allowed files or directories
+Each task must have:
+
+- one narrow objective
+- allowed read paths
+- allowed write paths
 - forbidden files or directories
-- whether file edits are allowed
+- explicit dependency ids when it must wait for previous work
 - expected output
 - stop conditions
 
@@ -46,13 +49,15 @@ Do not ask Claude to run tests. Ask Claude to make the file changes only. Codex 
 
 Default large-change loop:
 
-1. Decompose the target into bounded Claude tasks.
-2. Dispatch each task with `send`.
-3. Continue local Codex work or discussion without waiting.
-4. Run `status --include-workers` at checkpoints.
-5. For `done` tasks, inspect and verify artifacts directly with Codex.
-6. Integrate or correct the result.
-7. Stop workers or remove reviewed task records when appropriate.
+1. Decompose the target into small tasks, each with disjoint write paths when possible.
+2. Start up to 3 workers.
+3. Dispatch independent tasks in parallel with `send`.
+4. Dispatch follow-up tasks with `--depends-on <task-id>` so they run only after dependencies are `done`.
+5. Continue local Codex work or discussion without waiting.
+6. Run `status --include-workers` at checkpoints.
+7. For `done` tasks, inspect and verify artifacts directly with Codex.
+8. Integrate or correct the result.
+9. Stop workers or remove reviewed task records when appropriate.
 
 Do not use Claude output as final verification. Claude may produce useful work, but Codex owns the final correctness decision.
 
@@ -69,29 +74,50 @@ Preflight verifies unsandboxed execution, runtime write access, Claude Code avai
 2. Start the persistent worker pool.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)" --workers 1 --model opus
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)" --workers 3 --model opus
 ```
 
+Worker count is capped at 3. Use fewer only when write paths overlap or the task is inherently sequential.
+There is no per-task timeout. If a task is wrong, stale, or unsafe, Codex must stop the worker pool explicitly and inspect direct file evidence.
 Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
 `start --clean-runtime` is refused while an existing worker daemon is alive. Stop workers first.
 
-3. Send a bounded task.
+3. Prepare a bounded task file from the template.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send "<prompt>"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py template > /absolute/path/to/task.md
 ```
 
-For long tasks, prefer a prompt file:
+4. Send a bounded task.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send --prompt-file /absolute/path/to/task.md --read-path "$(pwd)" --write-path "$(pwd)/src"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send \
+  --prompt-file /absolute/path/to/task.md \
+  --read-path "$(pwd)/src" \
+  --read-path "$(pwd)/tests" \
+  --write-path "$(pwd)/src/module-a" \
+  --label "module-a-api" \
+  --group "checkpoint-8"
+```
+
+For dependent follow-up work:
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send \
+  --prompt-file /absolute/path/to/follow-up.md \
+  --read-path "$(pwd)/src" \
+  --write-path "$(pwd)/src/module-b" \
+  --depends-on "<previous-task-id>" \
+  --label "module-b-integration" \
+  --group "checkpoint-8"
 ```
 
 `send` normalizes escaped `\n` for inline prompts, reads `--prompt-file` directly for long tasks, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Queue order is recorded with a nanosecond monotonic-ish enqueue key. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
 Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. The worker denies tool calls outside the recorded paths.
+Use `--depends-on` to connect tasks. A dependent task stays queued until every dependency is `done`. If any dependency reaches a terminal non-`done` state or is missing, the dependent task becomes `failed`; it is not retried or auto-rerouted.
 After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
 
-4. Check status.
+5. Check status.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-workers
@@ -112,11 +138,11 @@ Task states:
 - `removed`: task record was removed from active consideration.
 - `dry-run`: task state was written without enqueueing Claude.
 
-5. Inspect and verify.
+6. Inspect and verify.
 
 Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Codex runs tests when appropriate. Claude's result is not treated as verification by itself.
 
-6. Stop workers or remove task records when appropriate.
+7. Stop workers or remove task records when appropriate.
 
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py stop --workers
@@ -143,3 +169,45 @@ Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate
 The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
 
 The SDK worker must be tool-isolated. It starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only read-only discovery tools (`Read`, `LS`, `Glob`, `Grep`) within recorded read paths and edit tools (`Edit`, `MultiEdit`, `Write`) within recorded write paths.
+
+## Task Template Contract
+
+Every substantial Claude task file should follow this structure:
+
+```markdown
+# Claude Delegate Task
+
+## Objective
+- One narrow, independently reviewable change.
+
+## Context
+- What Claude needs to know before editing.
+- Mention related task ids if this task depends on previous Claude work.
+
+## Allowed Read Paths
+- /absolute/path/or/workdir-relative/path
+
+## Allowed Write Paths
+- /absolute/path/or/workdir-relative/path
+
+## Forbidden
+- Do not edit tests unless this task explicitly owns tests.
+- Do not run shell commands, tests, package managers, servers, git, browsers, MCP, or external tools.
+- Do not broaden scope.
+
+## Required Changes
+- Small bullet 1.
+- Small bullet 2.
+
+## Acceptance Contract
+- What Codex will verify after completion.
+- Expected files/functions/exports.
+
+## Stop Conditions
+- Stop if required files are missing.
+- Stop if the requested change requires editing outside allowed write paths.
+
+## Final Response
+- Summarize changed files.
+- Include TASK_DONE.
+```
