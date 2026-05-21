@@ -25,6 +25,7 @@ WATCHER_SCRIPT = CODEX_HOME / "bin" / "claude-delegate-watch"
 WATCHER_LABEL = "com.leegangho.codex.claude-delegate-watch"
 WATCHER_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{WATCHER_LABEL}.plist"
 MONITOR_HEARTBEAT_FILE = RUNTIME_DIR / "monitor" / "heartbeat.json"
+THREAD_HEARTBEAT_AUTOMATION_NAME = "Claude delegate heartbeat"
 STATE_FILE = RUNTIME_DIR / "current.json"
 DAEMON_FILE = RUNTIME_DIR / "daemon.json"
 LOCK_FILE = SKILL_DIR / ".runtime.lock"
@@ -475,6 +476,36 @@ def trigger_delegate_watcher() -> dict[str, Any]:
     return result
 
 
+def thread_heartbeat_automation_state(tasks: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    tasks = tasks or []
+    queued_task_ids = [task["id"] for task in tasks if task.get("status") == "queued"]
+    running_task_ids = [task["id"] for task in tasks if task.get("status") == "running"]
+    created_task_ids = [task["id"] for task in tasks if task.get("status") == "created"]
+    active_task_ids = created_task_ids + queued_task_ids + running_task_ids
+    recommended_action = "create_or_keep" if active_task_ids else "delete_if_present_after_verification"
+    return {
+        "name": THREAD_HEARTBEAT_AUTOMATION_NAME,
+        "heartbeat_file": str(MONITOR_HEARTBEAT_FILE),
+        "recommended_action": recommended_action,
+        "active_task_ids": active_task_ids,
+        "created_task_ids": created_task_ids,
+        "queued_task_ids": queued_task_ids,
+        "running_task_ids": running_task_ids,
+        "delete_ready": not active_task_ids,
+        "delete_condition": "queued/running/created task counts are zero and Codex has verified terminal task artifacts",
+    }
+
+
+def require_thread_heartbeat_automation_confirmed(confirmed: bool) -> None:
+    if confirmed:
+        return
+    raise SystemExit(
+        "thread-scoped heartbeat automation must be created before non-dry-run send/dispatch; "
+        "create the Codex thread heartbeat automation for this conversation, then rerun with "
+        "--thread-heartbeat-automation-confirmed"
+    )
+
+
 def run_preflight(cwd: str) -> dict[str, Any]:
     require_unsandboxed()
     ensure_dirs()
@@ -492,6 +523,7 @@ def run_preflight(cwd: str) -> dict[str, Any]:
         "venv_python": str(VENV_PYTHON),
         "claude_version": claude_version(cwd),
         "delegate_watcher": trigger_delegate_watcher(),
+        "thread_heartbeat_automation": thread_heartbeat_automation_state([]),
     }
 
 
@@ -941,6 +973,8 @@ def validate_manifest_data(manifest: dict[str, Any], strict: bool) -> dict[str, 
 
 def send(args: argparse.Namespace) -> None:
     require_unsandboxed()
+    if not args.dry_run:
+        require_thread_heartbeat_automation_confirmed(args.thread_heartbeat_automation_confirmed)
     if args.prompt_file:
         prompt = Path(args.prompt_file).read_text()
     elif args.prompt:
@@ -1072,6 +1106,7 @@ def status(args: argparse.Namespace) -> None:
         "daemon_alive": daemon_alive,
         "daemon": daemon,
         "tasks": strip_accounting_fields(tasks) if args.verbose else [summarize_task(task) for task in tasks],
+        "thread_heartbeat_automation": thread_heartbeat_automation_state(tasks),
     }
     if args.include_workers:
         workers = []
@@ -1196,6 +1231,7 @@ def manifest_validate(args: argparse.Namespace) -> None:
 
 def dispatch_manifest(args: argparse.Namespace) -> None:
     require_unsandboxed()
+    require_thread_heartbeat_automation_confirmed(args.thread_heartbeat_automation_confirmed)
     with RuntimeLock():
         state = read_state()
         if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
@@ -1294,6 +1330,7 @@ def main() -> int:
     p.add_argument("--group")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
+    p.add_argument("--thread-heartbeat-automation-confirmed", action="store_true")
     p.set_defaults(func=send)
 
     p = sub.add_parser("status")
@@ -1356,6 +1393,7 @@ def main() -> int:
     p.add_argument("--manifest", required=True)
     p.add_argument("--strict", action="store_true")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--thread-heartbeat-automation-confirmed", action="store_true")
     p.set_defaults(func=dispatch_manifest)
 
     args = parser.parse_args()
