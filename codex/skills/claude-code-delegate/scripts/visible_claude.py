@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import fcntl
 import hashlib
 import json
 import os
@@ -21,12 +22,14 @@ RUNTIME_DIR = SKILL_DIR / "runtime"
 VENV_PYTHON = SKILL_DIR / ".venv" / "bin" / "python"
 STATE_FILE = RUNTIME_DIR / "current.json"
 DAEMON_FILE = RUNTIME_DIR / "daemon.json"
+LOCK_FILE = SKILL_DIR / ".runtime.lock"
 STOP_FILE = RUNTIME_DIR / "stop-daemon"
 TASKS_DIR = RUNTIME_DIR / "tasks"
 QUEUE_DIR = RUNTIME_DIR / "queue"
 WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
+ACTIVE_TASK_STATES = {"created", "queued", "running"}
 DEFAULT_MODEL = "opus"
 MAX_WORKERS = 3
 DEFAULT_MAX_TURNS = 12
@@ -129,7 +132,7 @@ def normalize_prompt_arg(prompt: str) -> str:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
     tmp.replace(path)
 
@@ -159,6 +162,17 @@ def run_command(args: list[str], cwd: str, timeout: float | None = None) -> subp
 def ensure_dirs() -> None:
     for path in (RUNTIME_DIR, TASKS_DIR, QUEUE_DIR, WORKERS_DIR, LOGS_DIR):
         path.mkdir(parents=True, exist_ok=True)
+
+
+class RuntimeLock:
+    def __enter__(self) -> None:
+        LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self.handle = LOCK_FILE.open("w")
+        fcntl.flock(self.handle, fcntl.LOCK_EX)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        fcntl.flock(self.handle, fcntl.LOCK_UN)
+        self.handle.close()
 
 
 def read_state() -> dict[str, Any]:
@@ -205,6 +219,12 @@ def path_allowed(path: str, allowed_paths: list[str], workdir: str) -> bool:
         if candidate == allowed or allowed in candidate.parents:
             return True
     return False
+
+
+def paths_overlap(left: str, right: str, workdir: str) -> bool:
+    left_path = resolve_in_workdir(left, workdir)
+    right_path = resolve_in_workdir(right, workdir)
+    return left_path == right_path or left_path in right_path.parents or right_path in left_path.parents
 
 
 def tool_file_path(tool_input: dict[str, Any]) -> str | None:
@@ -288,6 +308,27 @@ def existing_task_for(prompt_sha256: str, workdir: str) -> dict[str, Any] | None
         if task.get("prompt_sha256") == prompt_sha256 and task.get("workdir") == workdir:
             return task
     return None
+
+
+def active_write_conflicts(write_paths: list[str], depends_on: list[str] | None, workdir: str) -> list[str]:
+    dependencies = set(depends_on or [])
+    conflicts: list[str] = []
+    for task in list_tasks():
+        task_id = str(task.get("id") or "")
+        if task.get("workdir") != workdir:
+            continue
+        if task.get("status") not in ACTIVE_TASK_STATES:
+            continue
+        if task_id in dependencies:
+            continue
+        for existing_path in task.get("write_paths") or [workdir]:
+            for candidate_path in write_paths:
+                if paths_overlap(str(existing_path), str(candidate_path), workdir):
+                    conflicts.append(f"{task_id}:{existing_path}")
+                    break
+            if conflicts and conflicts[-1].startswith(f"{task_id}:"):
+                break
+    return conflicts
 
 
 def process_alive(pid: int | None) -> bool:
@@ -621,48 +662,49 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
 def start(args: argparse.Namespace) -> None:
     require_opus(args.model)
     require_worker_count(args.workers)
-    preflight = run_preflight(args.workdir)
-    info = daemon_info()
-    if info and info.get("alive"):
-        raise SystemExit(f"delegate daemon already running pid={info['pid']}; stop workers before restarting or cleaning runtime")
-    if args.clean_runtime:
-        shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
-        ensure_dirs()
-    STOP_FILE.unlink(missing_ok=True)
-    stdout_path = LOGS_DIR / "daemon.stdout.log"
-    stderr_path = LOGS_DIR / "daemon.stderr.log"
-    with stdout_path.open("a") as stdout, stderr_path.open("a") as stderr:
-        proc = subprocess.Popen(
-            [
-                str(VENV_PYTHON),
-                str(Path(__file__).resolve()),
-                "daemon",
-                "--workdir",
-                args.workdir,
-                "--workers",
-                str(args.workers),
-                "--model",
-                args.model,
-            ],
-            cwd=args.workdir,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
-    state = {
-        "mode": "sdk-worker-pool",
-        "status": "ready",
-        "workdir": args.workdir,
-        "workers": args.workers,
-        "model": args.model,
-        "runtime_dir": str(RUNTIME_DIR),
-        "tasks_dir": str(TASKS_DIR),
-        "queue_dir": str(QUEUE_DIR),
-        "started_at": now_iso(),
-        "daemon_pid": proc.pid,
-        "claude_version": preflight["claude_version"],
-    }
-    write_state(state)
+    with RuntimeLock():
+        preflight = run_preflight(args.workdir)
+        info = daemon_info()
+        if info and info.get("alive"):
+            raise SystemExit(f"delegate daemon already running pid={info['pid']}; stop workers before restarting or cleaning runtime")
+        if args.clean_runtime:
+            shutil.rmtree(RUNTIME_DIR, ignore_errors=True)
+            ensure_dirs()
+        STOP_FILE.unlink(missing_ok=True)
+        stdout_path = LOGS_DIR / "daemon.stdout.log"
+        stderr_path = LOGS_DIR / "daemon.stderr.log"
+        with stdout_path.open("a") as stdout, stderr_path.open("a") as stderr:
+            proc = subprocess.Popen(
+                [
+                    str(VENV_PYTHON),
+                    str(Path(__file__).resolve()),
+                    "daemon",
+                    "--workdir",
+                    args.workdir,
+                    "--workers",
+                    str(args.workers),
+                    "--model",
+                    args.model,
+                ],
+                cwd=args.workdir,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+        state = {
+            "mode": "sdk-worker-pool",
+            "status": "ready",
+            "workdir": args.workdir,
+            "workers": args.workers,
+            "model": args.model,
+            "runtime_dir": str(RUNTIME_DIR),
+            "tasks_dir": str(TASKS_DIR),
+            "queue_dir": str(QUEUE_DIR),
+            "started_at": now_iso(),
+            "daemon_pid": proc.pid,
+            "claude_version": preflight["claude_version"],
+        }
+        write_state(state)
     print("Claude SDK worker pool ready")
     print(f"daemon_pid={proc.pid}")
     print(f"workers={args.workers}")
@@ -713,35 +755,53 @@ def create_task(
 
 def send(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    state = read_state()
-    if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
-        raise SystemExit("Claude SDK worker runtime is not ready; run start first")
-    info = daemon_info()
-    if not info or not info.get("alive"):
-        raise SystemExit("Claude SDK worker daemon is not running; run start")
     if args.prompt_file:
         prompt = Path(args.prompt_file).read_text()
     elif args.prompt:
         prompt = normalize_prompt_arg(args.prompt)
     else:
         raise SystemExit("send requires a prompt argument or --prompt-file")
-    task_id, task = create_task(state, prompt, args.force_new, args.read_path, args.write_path, args.depends_on, args.label, args.group)
-    if args.dry_run:
-        task = update_task(task, "dry-run", dry_run=True)
-    else:
-        queued_order = now_order()
-        task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order)
-        write_json(
-            queue_item_path(task_id),
-            {
-                "task_id": task_id,
-                "queued_at": task["updated_at"],
-                "queued_order": queued_order,
-                "depends_on": task.get("depends_on") or [],
-            },
+    with RuntimeLock():
+        state = read_state()
+        if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
+            raise SystemExit("Claude SDK worker runtime is not ready; run start first")
+        info = daemon_info()
+        if not info or not info.get("alive"):
+            raise SystemExit("Claude SDK worker daemon is not running; run start")
+        write_paths = args.write_path or [state["workdir"]]
+        if not args.dry_run:
+            conflicts = active_write_conflicts(write_paths, args.depends_on, state["workdir"])
+            if conflicts:
+                raise SystemExit(
+                    "overlapping active write paths; add --depends-on for the blocking task or split paths: "
+                    + ", ".join(conflicts)
+                )
+        task_id, task = create_task(
+            state,
+            prompt,
+            args.force_new,
+            args.read_path,
+            args.write_path,
+            args.depends_on,
+            args.label,
+            args.group,
         )
-    state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
-    write_state(state)
+        if args.dry_run:
+            task = update_task(task, "dry-run", dry_run=True)
+        else:
+            queued_order = now_order()
+            task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order)
+            write_json(
+                queue_item_path(task_id),
+                {
+                    "task_id": task_id,
+                    "queued_at": task["updated_at"],
+                    "queued_order": queued_order,
+                    "depends_on": task.get("depends_on") or [],
+                },
+            )
+        state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
+        write_state(state)
     print(f"task_id={task_id}")
     print(f"status={task['status']}")
     print(f"dispatched={str(not args.dry_run).lower()}")
@@ -803,22 +863,23 @@ def strip_accounting_fields(value: Any) -> Any:
 
 def status(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    state = read_state()
-    daemon = daemon_info()
-    tasks = list_tasks()
-    if daemon and not daemon.get("alive"):
-        tasks = [
-            update_task(task, "failed", error="sdk worker daemon is not running")
-            if task.get("status") in {"queued", "running"}
-            else task
-            for task in tasks
-        ]
-    state = sync_last_task(state, tasks)
-    daemon_alive = bool(daemon and daemon.get("alive"))
-    runtime_status = "ready" if daemon_alive and state.get("status") == "ready" else "stopped"
-    if daemon and not daemon_alive and state.get("status") == "ready":
-        state = {**state, "status": "stopped", "stopped_at": daemon.get("updated_at") or now_iso(), "daemon_alive": False}
-        write_state(state)
+    with RuntimeLock():
+        state = read_state()
+        daemon = daemon_info()
+        tasks = list_tasks()
+        if daemon and not daemon.get("alive"):
+            tasks = [
+                update_task(task, "failed", error="sdk worker daemon is not running")
+                if task.get("status") in {"queued", "running"}
+                else task
+                for task in tasks
+            ]
+        state = sync_last_task(state, tasks)
+        daemon_alive = bool(daemon and daemon.get("alive"))
+        runtime_status = "ready" if daemon_alive and state.get("status") == "ready" else "stopped"
+        if daemon and not daemon_alive and state.get("status") == "ready":
+            state = {**state, "status": "stopped", "stopped_at": daemon.get("updated_at") or now_iso(), "daemon_alive": False}
+            write_state(state)
     output = {
         **state,
         "runtime_status": runtime_status,
@@ -840,25 +901,26 @@ def status(args: argparse.Namespace) -> None:
 def stop(args: argparse.Namespace) -> None:
     require_unsandboxed()
     if args.workers:
-        for task in list_tasks():
-            if task.get("status") in {"queued", "running"}:
-                queue_item_path(task["id"]).unlink(missing_ok=True)
-                update_task(task, "stopped", stopped_at=now_iso(), stop_reason="worker pool stopped")
-        STOP_FILE.write_text(now_iso() + "\n")
-        info = daemon_info()
-        if info and info.get("alive"):
-            deadline = time.time() + 5
-            while time.time() < deadline and process_alive(info.get("pid")):
-                time.sleep(0.2)
-            if process_alive(info.get("pid")):
-                os.kill(int(info["pid"]), signal.SIGTERM)
-        if info:
-            daemon_state = {**info, "alive": False, "status": "stopped", "updated_at": now_iso()}
-            write_json(DAEMON_FILE, daemon_state)
-        if STATE_FILE.exists():
-            state = read_json(STATE_FILE)
-            state.update({"status": "stopped", "stopped_at": now_iso(), "daemon_alive": False})
-            write_state(state)
+        with RuntimeLock():
+            for task in list_tasks():
+                if task.get("status") in {"queued", "running"}:
+                    queue_item_path(task["id"]).unlink(missing_ok=True)
+                    update_task(task, "stopped", stopped_at=now_iso(), stop_reason="worker pool stopped")
+            STOP_FILE.write_text(now_iso() + "\n")
+            info = daemon_info()
+            if info and info.get("alive"):
+                deadline = time.time() + 5
+                while time.time() < deadline and process_alive(info.get("pid")):
+                    time.sleep(0.2)
+                if process_alive(info.get("pid")):
+                    os.kill(int(info["pid"]), signal.SIGTERM)
+            if info:
+                daemon_state = {**info, "alive": False, "status": "stopped", "updated_at": now_iso()}
+                write_json(DAEMON_FILE, daemon_state)
+            if STATE_FILE.exists():
+                state = read_json(STATE_FILE)
+                state.update({"status": "stopped", "stopped_at": now_iso(), "daemon_alive": False})
+                write_state(state)
         print("workers=stopped")
         return
     raise SystemExit("stop currently supports --workers only in sdk-worker-pool mode")
@@ -867,13 +929,14 @@ def stop(args: argparse.Namespace) -> None:
 def remove(args: argparse.Namespace) -> None:
     require_unsandboxed()
     removed: list[str] = []
-    for item in args.ids:
-        task = next((candidate for candidate in list_tasks() if candidate.get("id") == item), None)
-        if not task:
-            continue
-        queue_item_path(task["id"]).unlink(missing_ok=True)
-        update_task(task, "removed", removed_at=now_iso())
-        removed.append(task["id"])
+    with RuntimeLock():
+        for item in args.ids:
+            task = next((candidate for candidate in list_tasks() if candidate.get("id") == item), None)
+            if not task:
+                continue
+            queue_item_path(task["id"]).unlink(missing_ok=True)
+            update_task(task, "removed", removed_at=now_iso())
+            removed.append(task["id"])
     print(f"removed={','.join(removed) if removed else 'none'}")
 
 

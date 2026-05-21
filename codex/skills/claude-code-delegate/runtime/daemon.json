@@ -1,10 +1,11 @@
 {
+  "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
-  "pid": 6435,
-  "started_at": "2026-05-21T07:41:16Z",
-  "status": "running",
-  "updated_at": "2026-05-21T07:41:16Z",
-  "workdir": "/private/tmp/claude-delegate-complex-check",
+  "pid": 13762,
+  "started_at": "2026-05-21T07:45:44Z",
+  "status": "stopped",
+  "updated_at": "2026-05-21T07:46:07Z",
+  "workdir": "/private/tmp/claude-delegate-send-race-smoke",
   "workers": 3
 }

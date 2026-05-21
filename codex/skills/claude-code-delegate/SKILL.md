@@ -48,6 +48,7 @@ Each task is also bounded by an edit contract:
 These are not wall-clock timeouts. They are task-contract guards. If Claude cannot make progress within the edit contract, the task should fail visibly instead of holding a worker indefinitely.
 
 For substantial changes, do not send one broad task. Split work into the smallest independently reviewable tasks. Prefer 3 parallel workers when tasks have disjoint write paths. If a task would need to edit source and tests across multiple modules, split it into source-slice and test-slice tasks.
+The script enforces this: a new non-dry-run task is rejected if its write paths overlap any active `created`, `queued`, or `running` task, unless the new task declares that active task in `--depends-on`.
 
 Each task must have:
 
@@ -133,6 +134,8 @@ For dependent follow-up work:
 ```
 
 `send` normalizes escaped `\n` for inline prompts, reads `--prompt-file` directly for long tasks, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Queue order is recorded with a nanosecond monotonic-ish enqueue key. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
+Concurrent `send` invocations are serialized by a runtime lock before they create task records or update `current.json`; this supports dispatching multiple independent tasks quickly without corrupting runtime state.
+Lifecycle commands that mutate runtime state (`start`, `send`, `status`, `stop`, and `rm`) use the same runtime lock, so start/stop/status transitions cannot interleave with task creation.
 Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. Prefer file-level read paths: target file, direct dependency files, and the specific acceptance/test file Codex will later run. Do not pass broad source directories unless the task truly requires discovery. Write paths are automatically readable, so the target file does not need to be duplicated as a read path. The worker denies tool calls outside the recorded paths.
 Use `--depends-on` to connect tasks. A dependent task stays queued until every dependency is `done`. If any dependency reaches a terminal non-`done` state or is missing, the dependent task becomes `failed`; it is not retried or auto-rerouted.
 After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
