@@ -21,7 +21,7 @@ TASKS_DIR = RUNTIME_DIR / "tasks"
 CLAUDE_DIR = Path.home() / ".claude"
 CLAUDE_JOBS_DIR = CLAUDE_DIR / "jobs"
 BG_ID_RE = re.compile(r"backgrounded\s+.\s+([A-Za-z0-9_-]+)")
-TERMINAL_TASK_STATES = {"done", "failed", "stopped", "timeout", "dispatch_failed", "removed"}
+TERMINAL_TASK_STATES = {"done", "failed", "stopped", "dispatch_failed", "removed"}
 
 
 def now_iso() -> str:
@@ -287,15 +287,27 @@ def refresh_all_tasks() -> list[dict[str, Any]]:
     return refreshed
 
 
-def wait_for_task(task: dict[str, Any], timeout: float) -> dict[str, Any]:
-    deadline = time.time() + timeout
-    current = task
-    while time.time() < deadline:
-        current = refresh_task_from_job(current)
-        if current.get("status") in {"done", "failed", "stopped"}:
-            return current
-        time.sleep(0.5)
-    return update_task(current, "timeout", timeout_seconds=timeout)
+def sync_last_task(state: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    last_task = state.get("last_task")
+    if not isinstance(last_task, dict):
+        return state
+    last_id = last_task.get("id")
+    if not last_id:
+        return state
+    current = next((task for task in tasks if task.get("id") == last_id), None)
+    if not current:
+        return state
+    next_last_task = {
+        "id": current["id"],
+        "status": current.get("status"),
+        "task_file": current.get("task_file"),
+        "bg_id": current.get("bg_id"),
+    }
+    if next_last_task == last_task:
+        return state
+    state = {**state, "last_task": next_last_task}
+    write_state(state)
+    return state
 
 
 def dispatch_task(state: dict[str, Any], task: dict[str, Any], task_file: Path) -> dict[str, Any]:
@@ -355,8 +367,6 @@ def send(args: argparse.Namespace) -> None:
         task = update_task(task, "dry-run", dry_run=True)
     else:
         task = dispatch_task(state, task, task_file)
-        if args.wait and task.get("status") == "dispatched":
-            task = wait_for_task(task, args.wait)
     state["last_task"] = {"id": task_id, "status": task["status"], "task_file": str(task_file), "bg_id": task.get("bg_id")}
     write_state(state)
     print(f"task_id={task_id}")
@@ -364,7 +374,7 @@ def send(args: argparse.Namespace) -> None:
     if task.get("bg_id"):
         print(f"bg_id={task['bg_id']}")
     print(f"task_file={task_file}")
-    if task.get("status") in {"dispatch_failed", "failed", "timeout"}:
+    if task.get("status") in {"dispatch_failed", "failed"}:
         raise SystemExit(1)
 
 
@@ -372,6 +382,7 @@ def status(args: argparse.Namespace) -> None:
     require_unsandboxed()
     state = read_state()
     tasks = refresh_all_tasks()
+    state = sync_last_task(state, tasks)
     output = {
         **state,
         "agents": agents_json(state["workdir"]) if args.include_agents else None,
@@ -451,7 +462,6 @@ def main() -> int:
     p.add_argument("prompt")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
-    p.add_argument("--wait", type=float, default=0.0, help="seconds to wait for done/failed after dispatch")
     p.set_defaults(func=send)
 
     p = sub.add_parser("status")

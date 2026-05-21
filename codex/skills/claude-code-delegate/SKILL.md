@@ -37,7 +37,7 @@ claude --bg "<wrapper pointing at task.md>"
 
 The returned short background id is stored in `runtime/tasks/<task-id>/status.json`. Duplicate prompts for the same workdir are not dispatched twice unless `--force-new` is passed.
 
-Use `--wait <seconds>` when Codex should block until Claude's local job state reaches `done`, `failed`, or `stopped`.
+`send` must return immediately after dispatch. Do not wait for Claude completion in the send command. Codex remains available to continue the conversation or do local work, then checks completion later with `status`.
 
 4. Check status.
 
@@ -54,7 +54,6 @@ Task states:
 - `running`: the job exists but has not reached a terminal state.
 - `done`: `~/.claude/jobs/<id>/state.json` has `state: "done"`.
 - `failed`: dispatch or job state failed.
-- `timeout`: `send --wait` timed out before a terminal job state.
 - `stopped`: the background job was stopped.
 - `removed`: the background job was removed.
 - `dry-run`: task state was written without dispatching Claude.
@@ -79,5 +78,7 @@ Do not run this skill inside the Codex sandbox. Always establish the unsandboxed
 Do not inject work into Claude by writing to a PTY, FIFO, paste buffer, Remote Control, or TUI input line. Do not tune submit keys such as return, escape, or control sequences as a delivery mechanism.
 
 Do not use `claude --resume --print` as a fallback for ordinary delegation. The primary and only task dispatch path is Claude Code background agents via `claude --bg`.
+
+Do not block the Codex conversation waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints that refresh `~/.claude/jobs/<id>/state.json`.
 
 Do not treat `claude logs` as the source of truth for completion. Use `~/.claude/jobs/<id>/state.json`, then verify artifacts directly.
