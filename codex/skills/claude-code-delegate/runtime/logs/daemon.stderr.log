@@ -1,0 +1,266 @@
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
+Error in hook callback hook_0: 12315 | ${H.map((A)=>`- ${A.description||"(no description)"} (task ${A.task_id})`).join(`
+12316 | `)}
+12317 | Re-create them if still needed.
+12318 | </system-reminder>`}var ZV8=E(()=>{a6();V2()});function Z75(H){return H.replace(E75,(_)=>_==="\u2028"?"\\u2028":"\\u2029")}function SH6(H){return Z75(CH(H))}var E75;var St_=E(()=>{e6();E75=/\u2028|\u2029/g});function w6K(H){if(!H)return;if(H.type==="classifier")return H.reason;switch(H.type){case"rule":case"mode":case"subcommandResults":case"permissionPromptTool":return;case"hook":case"asyncAgent":case"sandboxOverride":case"workingDir":case"safetyCheck":case"other":return H.reason}}function j6K(H,_){try{return H.getToolUseSummary?.(_)??H.getActivityDescription?.(_)??""}catch(A){return N(`describeToolUseForPush failed: ${A}`,{level:"error"}),""}}function V75(H,_){if(!H.requiresUserInteraction?.())return;switch(H.name){case wf:{let A=Array.isArray(_?.questions)?_.questions:[],q=A[0],K=q?.header||q?.question,L=A.length>1?` (+${A.length-1} more)`:"";return{label:"Question",body:K?K+L:"Tap to answer"}}case j2:return{label:"Plan",body:"Plan ready for review"};case wQH:return{label:tJH(H.name),body:""};default:retur
+12319 | `)}async*read(){let H="",_=async function*(){for(;;){if(this.prependedLines.length>0)H=this.prependedLines.join("")+H,this.prependedLines=[];let A=H.indexOf(`
+12320 | `)}async sendRequest(H,_,A,q=eV6.randomUUID()){let K={type:"control_request",request_id:q,request:H};if(this.inputClosed)throw Error("Stream closed");if(A?.aborted)throw Error("Request aborted");if(this.outbound.enqueue(K),H.subtype==="can_use_tool"&&this.onControlRequestSent)this.onControlRequestSent(K);let L=()=>{this.outbound.enqueue({type:"control_cancel_request",request_id:q});let M=this.pendingRequests.get(q);if(M)this.trackResolvedToolUseId(M.request),M.reject(new M5)};if(A)A.addEventListener("abort",L,{once:!0});let f=Date.now();try{return await new Promise((M,$)=>{this.pendingRequests.set(q,{request:{type:"control_request",request_id:q,request:H},resolve:(O)=>{M(O)},reject:$,schema:_})})}finally{if(c("tengu_sdk_control_roundtrip",{subtype:H.subtype,duration_ms:Date.now()-f,aborted:A?.aborted??!1}),A)A.removeEventListener("abort",L);this.pendingRequests.delete(q)}}createCanUseTool(H){return async(_,A,q,K,L,f)=>{let M=f??await B2(_,A,q,K,L);if(M.behavior==="allow")return M;if(M.behavior==="deny"){let D
+
+error: Stream closed
+      at sendRequest (/$bunfs/root/src/entrypoints/cli.js:12320:133)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:12320:2813)
+      at Sr7 (/$bunfs/root/src/entrypoints/cli.js:11701:1258)
+      at <anonymous> (/$bunfs/root/src/entrypoints/cli.js:11698:2027)
+      at next (1:11)
+      at A (/$bunfs/root/src/entrypoints/cli.js:3339:45551)
+      at KY8 (/$bunfs/root/src/entrypoints/cli.js:3339:45701)
+      at next (1:11)
+      at g2 (/$bunfs/root/src/entrypoints/cli.js:11698:11386)
+      at next (1:11)
+
