@@ -1,9 +1,10 @@
 {
   "mode": "sdk-worker-pool",
-  "model": "sonnet",
-  "pid": 25078,
-  "status": "stopped",
-  "updated_at": "2026-05-21T05:50:16Z",
-  "workdir": "/private/tmp/claude-delegate-large-fixture",
+  "model": "opus",
+  "pid": 40174,
+  "started_at": "2026-05-21T05:57:17Z",
+  "status": "running",
+  "updated_at": "2026-05-21T05:57:17Z",
+  "workdir": "/private/tmp/claude-delegate-opus-big-fixture",
   "workers": 1
 }

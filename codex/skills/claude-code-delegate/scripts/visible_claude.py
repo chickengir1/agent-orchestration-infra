@@ -27,6 +27,8 @@ QUEUE_DIR = RUNTIME_DIR / "queue"
 WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
+DEFAULT_MODEL = "opus"
+DELEGATE_TOOLS = {"Read", "Edit", "MultiEdit", "Write"}
 
 
 def now_iso() -> str:
@@ -40,6 +42,11 @@ def now_order() -> int:
 def require_unsandboxed() -> None:
     if os.environ.get("CODEX_SANDBOX"):
         raise SystemExit("claude-code-delegate must run outside the Codex sandbox")
+
+
+def require_opus(model: str) -> None:
+    if model != DEFAULT_MODEL:
+        raise SystemExit("claude-code-delegate workers must use opus; restart with --model opus")
 
 
 def normalize_prompt_arg(prompt: str) -> str:
@@ -108,6 +115,27 @@ def task_events_path(task_id: str) -> Path:
 
 def queue_item_path(task_id: str) -> Path:
     return QUEUE_DIR / f"{task_id}.json"
+
+
+def resolve_in_workdir(path: str, workdir: str) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path(workdir) / candidate
+    return candidate.resolve(strict=False)
+
+
+def path_allowed(path: str, allowed_paths: list[str], workdir: str) -> bool:
+    candidate = resolve_in_workdir(path, workdir)
+    for item in allowed_paths:
+        allowed = resolve_in_workdir(item, workdir)
+        if candidate == allowed or allowed in candidate.parents:
+            return True
+    return False
+
+
+def tool_file_path(tool_input: dict[str, Any]) -> str | None:
+    value = tool_input.get("file_path") or tool_input.get("filePath") or tool_input.get("path")
+    return str(value) if value else None
 
 
 def list_tasks() -> list[dict[str, Any]]:
@@ -217,6 +245,8 @@ def dispatch_prompt(task: dict[str, Any]) -> str:
     return (
         f"Codex delegated task {task['id']}.\n"
         f"Read the task file at {task['task_file']} and execute it exactly.\n"
+        f"Machine-enforced read paths: {json.dumps(task.get('read_paths') or [], sort_keys=True)}.\n"
+        f"Machine-enforced write paths: {json.dumps(task.get('write_paths') or [], sort_keys=True)}.\n"
         "Do not ask me to paste the task again. Do not broaden scope.\n"
         "Respect the allowed and forbidden paths written in the task file.\n"
         f"When complete, include TASK_DONE {task['id']} in the final response."
@@ -225,14 +255,43 @@ def dispatch_prompt(task: dict[str, Any]) -> str:
 
 async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Queue[str], stop_event: asyncio.Event) -> None:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
+    from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
     worker_file = WORKERS_DIR / f"worker-{worker_id}.json"
+    active_task: dict[str, Any] | None = None
+
+    async def can_use_tool(tool_name: str, tool_input: dict[str, Any], _context: Any) -> Any:
+        if tool_name not in DELEGATE_TOOLS:
+            return PermissionResultDeny(message=f"{tool_name} is not allowed for claude-code-delegate workers")
+        if active_task is None:
+            return PermissionResultDeny(message="no active delegated task")
+        file_path = tool_file_path(tool_input)
+        if not file_path:
+            return PermissionResultDeny(message=f"{tool_name} requires a file path")
+        if tool_name == "Read":
+            read_paths = list(active_task.get("read_paths") or [workdir])
+            read_paths.append(str(active_task["task_file"]))
+            if path_allowed(file_path, read_paths, workdir):
+                return PermissionResultAllow()
+            return PermissionResultDeny(message=f"Read path is outside delegated scope: {file_path}")
+        write_paths = list(active_task.get("write_paths") or [workdir])
+        if path_allowed(file_path, write_paths, workdir):
+            return PermissionResultAllow()
+        return PermissionResultDeny(message=f"{tool_name} path is outside delegated write scope: {file_path}")
+
     options = ClaudeAgentOptions(
         cwd=workdir,
         model=model,
-        tools=["Read", "Edit", "MultiEdit", "Write"],
+        tools=sorted(DELEGATE_TOOLS),
         permission_mode="acceptEdits",
-        allowed_tools=["Read", "Edit", "MultiEdit", "Write"],
+        allowed_tools=sorted(DELEGATE_TOOLS),
+        can_use_tool=can_use_tool,
+        mcp_servers={},
+        strict_mcp_config=True,
+        plugins=[],
+        skills=[],
+        agents={},
+        setting_sources=[],
         add_dirs=["/private/tmp"],
     )
     write_json(worker_file, {"id": worker_id, "status": "connecting", "updated_at": now_iso()})
@@ -245,7 +304,9 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 continue
             try:
                 task = read_json(task_status_path(task_id))
+                active_task = task
                 task = update_task(task, "running", worker_id=worker_id, started_at=now_iso())
+                active_task = task
                 write_json(worker_file, {"id": worker_id, "status": "running", "task_id": task_id, "updated_at": now_iso()})
                 await client.query(dispatch_prompt(task))
                 result: dict[str, Any] | None = None
@@ -267,6 +328,8 @@ async def worker_loop(worker_id: int, workdir: str, model: str, queue: asyncio.Q
                 except Exception:
                     append_jsonl(LOGS_DIR / "daemon-errors.jsonl", {"timestamp": now_iso(), "task_id": task_id, "error": repr(exc)})
             finally:
+                active_task = None
+                queue_item_path(task_id).unlink(missing_ok=True)
                 queue.task_done()
                 write_json(worker_file, {"id": worker_id, "status": "idle", "updated_at": now_iso()})
 
@@ -336,6 +399,7 @@ async def daemon_main_async(args: argparse.Namespace) -> None:
 
 
 def start(args: argparse.Namespace) -> None:
+    require_opus(args.model)
     preflight = run_preflight(args.workdir)
     info = daemon_info()
     if info and info.get("alive"):
@@ -384,7 +448,7 @@ def start(args: argparse.Namespace) -> None:
     print(f"state={STATE_FILE}")
 
 
-def create_task(state: dict[str, Any], prompt: str, force_new: bool) -> tuple[str, dict[str, Any]]:
+def create_task(state: dict[str, Any], prompt: str, force_new: bool, read_paths: list[str] | None, write_paths: list[str] | None) -> tuple[str, dict[str, Any]]:
     prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     if not force_new:
         existing = existing_task_for(prompt_sha256, state["workdir"])
@@ -406,6 +470,8 @@ def create_task(state: dict[str, Any], prompt: str, force_new: bool) -> tuple[st
         "prompt_sha256": prompt_sha256,
         "task_file": str(task_file),
         "transport": "claude-agent-sdk-worker",
+        "read_paths": read_paths or [state["workdir"]],
+        "write_paths": write_paths or [state["workdir"]],
     }
     write_json(task_status_path(task_id), task)
     append_jsonl(task_events_path(task_id), {"type": "task_status", "timestamp": task["created_at"], "status": "created"})
@@ -420,8 +486,13 @@ def send(args: argparse.Namespace) -> None:
     info = daemon_info()
     if not info or not info.get("alive"):
         raise SystemExit("Claude SDK worker daemon is not running; run start")
-    prompt = normalize_prompt_arg(args.prompt)
-    task_id, task = create_task(state, prompt, args.force_new)
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text()
+    elif args.prompt:
+        prompt = normalize_prompt_arg(args.prompt)
+    else:
+        raise SystemExit("send requires a prompt argument or --prompt-file")
+    task_id, task = create_task(state, prompt, args.force_new, args.read_path, args.write_path)
     if args.dry_run:
         task = update_task(task, "dry-run", dry_run=True)
     else:
@@ -432,6 +503,8 @@ def send(args: argparse.Namespace) -> None:
     write_state(state)
     print(f"task_id={task_id}")
     print(f"status={task['status']}")
+    print(f"dispatched={str(not args.dry_run).lower()}")
+    print("nonblocking=true")
     print(f"task_file={task['task_file']}")
 
 
@@ -485,7 +558,18 @@ def status(args: argparse.Namespace) -> None:
             for task in tasks
         ]
     state = sync_last_task(state, tasks)
-    output = {**state, "daemon": daemon, "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks]}
+    daemon_alive = bool(daemon and daemon.get("alive"))
+    runtime_status = "ready" if daemon_alive and state.get("status") == "ready" else "stopped"
+    if daemon and not daemon_alive and state.get("status") == "ready":
+        state = {**state, "status": "stopped", "stopped_at": daemon.get("updated_at") or now_iso(), "daemon_alive": False}
+        write_state(state)
+    output = {
+        **state,
+        "runtime_status": runtime_status,
+        "daemon_alive": daemon_alive,
+        "daemon": daemon,
+        "tasks": tasks if args.verbose else [summarize_task(task) for task in tasks],
+    }
     if args.include_workers:
         workers = []
         for path in sorted(WORKERS_DIR.glob("worker-*.json")):
@@ -512,6 +596,10 @@ def stop(args: argparse.Namespace) -> None:
                 time.sleep(0.2)
             if process_alive(info.get("pid")):
                 os.kill(int(info["pid"]), signal.SIGTERM)
+        if STATE_FILE.exists():
+            state = read_json(STATE_FILE)
+            state.update({"status": "stopped", "stopped_at": now_iso(), "daemon_alive": False})
+            write_state(state)
         print("workers=stopped")
         return
     raise SystemExit("stop currently supports --workers only in sdk-worker-pool mode")
@@ -535,6 +623,7 @@ def preflight(args: argparse.Namespace) -> None:
 
 
 def daemon(args: argparse.Namespace) -> None:
+    require_opus(args.model)
     asyncio.run(daemon_main_async(args))
 
 
@@ -549,12 +638,15 @@ def main() -> int:
     p = sub.add_parser("start")
     p.add_argument("--workdir", default=os.getcwd())
     p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--model", default="sonnet")
+    p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--clean-runtime", action="store_true")
     p.set_defaults(func=start)
 
     p = sub.add_parser("send")
-    p.add_argument("prompt")
+    p.add_argument("prompt", nargs="?")
+    p.add_argument("--prompt-file")
+    p.add_argument("--read-path", action="append")
+    p.add_argument("--write-path", action="append")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
     p.set_defaults(func=send)

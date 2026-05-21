@@ -69,7 +69,7 @@ Preflight verifies unsandboxed execution, runtime write access, Claude Code avai
 2. Start the persistent worker pool.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)" --workers 1 --model sonnet
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py start --workdir "$(pwd)" --workers 1 --model opus
 ```
 
 Use `--clean-runtime` only when intentionally discarding the skill runtime's tracked task files.
@@ -81,7 +81,15 @@ Use `--clean-runtime` only when intentionally discarding the skill runtime's tra
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send "<prompt>"
 ```
 
-`send` normalizes escaped `\n`, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Queue order is recorded with a nanosecond monotonic-ish enqueue key. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
+For long tasks, prefer a prompt file:
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py send --prompt-file /absolute/path/to/task.md --read-path "$(pwd)" --write-path "$(pwd)/src"
+```
+
+`send` normalizes escaped `\n` for inline prompts, reads `--prompt-file` directly for long tasks, writes the full task to `runtime/tasks/<task-id>/task.md`, writes a queue item under `runtime/queue`, records `runtime/tasks/<task-id>/status.json`, and returns immediately. Queue order is recorded with a nanosecond monotonic-ish enqueue key. Duplicate prompts for the same workdir are not enqueued twice unless `--force-new` is passed.
+Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. The worker denies tool calls outside the recorded paths.
+After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
 
 4. Check status.
 
@@ -91,6 +99,7 @@ Use `--clean-runtime` only when intentionally discarding the skill runtime's tra
 
 `status` reads runtime task files, daemon state, and worker state. It does not infer completion from terminal output. The default output is compact; use `--verbose` to include full SDK result payloads.
 If the daemon is dead while tasks are still `queued` or `running`, `status` marks those tasks `failed`.
+`status` also reports `runtime_status` and `daemon_alive`, so a stopped worker pool is mechanically visible even if old task records remain.
 
 Task states:
 
@@ -129,3 +138,8 @@ Do not block the Codex conversation waiting for Claude completion after `send`. 
 Do not treat Claude output as the source of truth for correctness. Use direct worktree inspection and tests.
 
 Do not ask Claude delegate workers to run tests or commands. Delegate workers are for file reads and file edits only; Codex handles command execution and verification.
+
+Always run delegate workers with `opus`. Do not use `sonnet` for normal delegate work.
+The script enforces this at `start` and daemon launch time. Treat a non-`opus` model request as a configuration error, not as a lower-cost fallback.
+
+The SDK worker must be tool-isolated. It starts with MCP servers, plugins, skills, agents, and user/project/local setting sources disabled, and it uses a permission callback that allows only `Read`, `Edit`, `MultiEdit`, and `Write` within the task's recorded read/write paths.

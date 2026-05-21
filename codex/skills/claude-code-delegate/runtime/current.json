@@ -1,18 +1,20 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "daemon_pid": 25078,
+  "daemon_alive": false,
+  "daemon_pid": 40174,
   "last_task": {
-    "id": "b6e8b675fd24934a-20260521144705",
-    "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/b6e8b675fd24934a-20260521144705/task.md"
+    "id": "d87c4b0d3d5946b6",
+    "status": "stopped",
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/d87c4b0d3d5946b6/task.md"
   },
   "mode": "sdk-worker-pool",
-  "model": "sonnet",
+  "model": "opus",
   "queue_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/queue",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T05:46:52Z",
-  "status": "ready",
+  "started_at": "2026-05-21T05:57:16Z",
+  "status": "stopped",
+  "stopped_at": "2026-05-21T05:59:30Z",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
-  "workdir": "/private/tmp/claude-delegate-large-fixture",
+  "workdir": "/private/tmp/claude-delegate-opus-big-fixture",
   "workers": 1
 }
