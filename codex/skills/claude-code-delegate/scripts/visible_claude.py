@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import dataclasses
 import fcntl
@@ -13,9 +14,13 @@ import signal
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # /usr/bin/python3 on older macOS runtimes.
+    tomllib = None
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -504,13 +509,43 @@ def automation_toml_path(automation_id: str) -> Path:
     return AUTOMATIONS_DIR / automation_id / "automation.toml"
 
 
+def parse_basic_toml(text: str) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if raw_value.startswith(('"', "'")):
+            try:
+                data[key] = ast.literal_eval(raw_value)
+            except (SyntaxError, ValueError):
+                data[key] = raw_value.strip('"').strip("'")
+        elif raw_value.lower() in {"true", "false"}:
+            data[key] = raw_value.lower() == "true"
+        else:
+            try:
+                data[key] = int(raw_value)
+            except ValueError:
+                data[key] = raw_value
+    return data
+
+
+def parse_toml(text: str) -> dict[str, Any]:
+    if tomllib is not None:
+        return tomllib.loads(text)
+    return parse_basic_toml(text)
+
+
 def read_automation(automation_id: str) -> dict[str, Any]:
     path = automation_toml_path(automation_id)
     if not path.exists():
         raise SystemExit(f"thread heartbeat automation not found: {path}")
     try:
-        return tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError as exc:
+        return parse_toml(path.read_text())
+    except Exception as exc:
         raise SystemExit(f"invalid automation TOML for {automation_id}: {exc}") from exc
 
 

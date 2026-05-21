@@ -1,13 +1,38 @@
 {
-  "checked_at": "2026-05-21T09:12:09Z",
-  "daemon_alive": false,
-  "done_tasks": 0,
+  "checked_at": "2026-05-21T09:21:47Z",
+  "daemon_alive": true,
+  "daemon_pid": 61813,
+  "daemon_status": "running",
+  "done_tasks": 8,
   "failed_tasks": 0,
+  "last_task": {
+    "id": "288fabdb50e58b4c",
+    "status": "done",
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/288fabdb50e58b4c/task.md"
+  },
+  "model": "opus",
   "queued_task_ids": [],
   "queued_tasks": 0,
   "running_task_ids": [],
   "running_tasks": 0,
-  "runtime_status": "unknown",
-  "status_error": "Traceback (most recent call last):\n  File \"/Users/leegangho/.codex/skills/claude-code-delegate/scripts/visible_claude.py\", line 16, in <module>\n    import tomllib\nModuleNotFoundError: No module named 'tomllib'",
-  "stopped_tasks": 0
+  "runtime_status": "ready",
+  "stopped_tasks": 3,
+  "workdir": "/Users/leegangho/sbe-web-v4",
+  "workers": [
+    {
+      "id": 1,
+      "status": "idle",
+      "updated_at": "2026-05-21T09:17:57Z"
+    },
+    {
+      "id": 2,
+      "status": "idle",
+      "updated_at": "2026-05-21T09:16:40Z"
+    },
+    {
+      "id": 3,
+      "status": "idle",
+      "updated_at": "2026-05-21T09:16:40Z"
+    }
+  ]
 }
