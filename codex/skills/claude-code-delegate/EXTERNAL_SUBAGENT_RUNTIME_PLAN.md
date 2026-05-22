@@ -24,7 +24,7 @@ Current implementation is task-oriented:
 - `dispatch --manifest` maps manifest task ids to runtime task ids.
 - Thread heartbeat automation is required for non-dry-run dispatch and is verified through `~/.codex/automations/<automation-id>/automation.toml`.
 
-Observed bottlenecks:
+Observed bottlenecks before Checkpoint 1:
 
 - `status --include-workers` emits all historical task summaries.
 - Codex main repeatedly reasons about heartbeat stale state, task terminal state, artifact verification, and cleanup.
@@ -379,14 +379,20 @@ Changes:
 
 - Make default `status` compact.
 - Add `--history --limit`, `--task`, `--active-only`.
-- Preserve `--verbose` for debug output.
+- Add `--all` for all task summaries.
+- Preserve `--verbose` for full debug output.
+- Include `metrics.status_bytes` in status output.
+- Return short CLI errors for missing or invalid manifest files.
 
 Verification:
 
 - default status under 1 KB on current runtime,
+- `status --include-workers` under 1 KB on idle runtime,
 - `--task <id>` prints one task,
 - `--history --limit 3` prints three historical tasks,
-- old `status --include-workers --verbose` still available for debugging.
+- `--active-only` prints only active tasks,
+- `--all` and `--verbose` remain available for debugging,
+- missing manifest validation fails without traceback.
 
 ### Checkpoint 2: Run Storage
 
@@ -399,6 +405,8 @@ Changes:
 
 - Add `runtime/runs/<run-id>/` layout.
 - Add `run init`.
+- Add `run status <run-id>`.
+- Add `run summary <run-id>`.
 - Copy manifest into run directory.
 - Write initial `state.json`, `events.jsonl`, `summary.json`.
 
@@ -407,6 +415,7 @@ Verification:
 - `run init` creates deterministic files.
 - invalid duplicate run id is rejected unless explicit force flag exists.
 - summary is compact.
+- `run status` and `run summary` read only run files and do not scan historical task records.
 
 ### Checkpoint 3: Run Start
 

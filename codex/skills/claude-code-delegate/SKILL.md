@@ -88,7 +88,7 @@ Default large-change loop:
 6. Start up to 3 workers.
 7. Dispatch the manifest. Do not manually dispatch broad or unvalidated tasks for large work.
 8. Continue local Codex work or discussion without waiting. While Codex is already active, do not expect heartbeat automation to interrupt a running assistant turn or blocking tool call; Codex should check status directly at natural checkpoints.
-9. Run `status --include-workers` at checkpoints.
+9. Run compact `status` at checkpoints. Add detail flags only when needed.
 10. For `done` tasks, inspect and verify artifacts directly with Codex.
 11. For `failed` tasks, inspect events and split smaller; do not resend the same broad task.
 12. Integrate or correct the result.
@@ -112,10 +112,10 @@ Codex must also create a thread-scoped heartbeat automation before any non-dry-r
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py heartbeat-prompt
 ```
 
-The heartbeat prompt must treat heartbeat as a cold/idle wake trigger only. It is not an active-turn interrupt mechanism. If direct `status --include-workers` shows any task is `created`, `queued`, or `running`, it must respond with `DONT_NOTIFY`, skip artifact inspection, and keep the automation. Only when no active tasks remain should it inspect task status and artifacts, then delete the thread-scoped automation after verification.
+The heartbeat prompt must treat heartbeat as a cold/idle wake trigger only. It is not an active-turn interrupt mechanism. If direct compact `status` shows any task is `created`, `queued`, or `running`, it must respond with `DONT_NOTIFY`, skip artifact inspection, and keep the automation. Only when no active tasks remain should it inspect task status and artifacts, then delete the thread-scoped automation after verification.
 The script enforces this lifecycle gate: non-dry-run `send` and `dispatch` require `--thread-heartbeat-automation-id <automation-id>`. The script reads `~/.codex/automations/<automation-id>/automation.toml` and rejects dispatch unless it is an `ACTIVE` heartbeat automation, has a `target_thread_id`, and its prompt mentions this skill's heartbeat file.
 
-Treat heartbeat automation as a wake trigger, not as the source of truth. The heartbeat file may be one sampling interval behind task reality. When a heartbeat wakes Codex, immediately re-read direct task state with `status --include-workers` and the relevant `runtime/tasks/<task-id>/status.json`, then inspect artifacts. If task state and heartbeat disagree, trust the task status files and direct artifacts, optionally refresh the watcher once, and only delete the thread-scoped automation after direct verification is complete. If Codex is already active in the foreground, direct status checks are the delivery path; heartbeat may not arrive until the active turn is over.
+Treat heartbeat automation as a wake trigger, not as the source of truth. The heartbeat file may be one sampling interval behind task reality. When a heartbeat wakes Codex, immediately re-read direct task state with compact `status` and the relevant task detail through `status --task "<task-id>"`, then inspect artifacts. If task state and heartbeat disagree, trust the task status files and direct artifacts, optionally refresh the watcher once, and only delete the thread-scoped automation after direct verification is complete. If Codex is already active in the foreground, direct status checks are the delivery path; heartbeat may not arrive until the active turn is over.
 
 2. Start the persistent worker pool.
 
@@ -200,27 +200,51 @@ After `send`, Codex must keep the conversation available. Do not block the user 
   --manifest /absolute/path/to/checkpoint-8.manifest.json \
   --strict
 
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run init \
+  --run-id checkpoint-8 \
+  --backend claude-code \
+  --manifest /absolute/path/to/checkpoint-8.manifest.json \
+  --strict
+
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py dispatch \
   --manifest /absolute/path/to/checkpoint-8.manifest.json \
   --strict \
   --thread-heartbeat-automation-id "<automation-id>"
 ```
 
+`run init` creates `runtime/runs/<run-id>/manifest.json`, `state.json`, `events.jsonl`, and `summary.json`. This is a Codex-facing checkpoint record only; it does not dispatch Claude work yet. Duplicate run ids are rejected unless `--force` is explicitly passed.
+
 Manifest dependencies use manifest task ids. `dispatch` translates them to runtime task ids and records `runtime_task_id` back into the manifest. Manifest validation rejects overlapping write paths unless the tasks have an explicit dependency edge.
 
 7. Check status.
 
 ```bash
-~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-workers
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run status checkpoint-8
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run summary checkpoint-8
 ```
 
-`status` reads runtime task files, daemon state, and worker state. It does not infer completion from terminal output. The default output is compact; use `--verbose` to include full SDK result payloads.
+`status` reads runtime task files and daemon state. It does not infer completion from terminal output. The default output is compact and should stay under 1 KB during normal use.
+`run status` and `run summary` read only the run files under `runtime/runs/<run-id>/`; they do not scan historical task records.
 If the daemon is dead while tasks are still `queued` or `running`, `status` marks those tasks `failed`.
 `status` also reports `runtime_status` and `daemon_alive`, so a stopped worker pool is mechanically visible even if old task records remain.
-`status` also reports `thread_heartbeat_automation`. Use this field as the lifecycle gate for the Codex app automation:
+`status` also reports `heartbeat.delete_ready` and active task ids. Use these fields as the lifecycle gate for the Codex app automation:
 
-- `recommended_action: create_or_keep`: the thread-scoped heartbeat automation must exist.
-- `recommended_action: delete_if_present_after_verification`: remove the thread-scoped heartbeat automation after Codex has inspected and verified all terminal task artifacts for the current checkpoint.
+- `heartbeat.delete_ready: false`: the thread-scoped heartbeat automation must exist.
+- `heartbeat.delete_ready: true`: remove the thread-scoped heartbeat automation after Codex has inspected and verified all terminal task artifacts for the current checkpoint.
+
+Use detail output only when needed:
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --include-workers
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --active-only
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --history --limit 3
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --task "<task-id>"
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --all
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status --verbose
+```
+
+`--all` prints all task summaries. `--verbose` prints full task records with SDK result payloads, excluding model/accounting fields. Avoid both in normal Codex flow.
 
 Task states:
 
@@ -247,7 +271,7 @@ Running task records also include the enforced session and guard fields:
 8. Inspect and verify.
 
 Codex inspects changed files, task `status.json`, task `events.jsonl`, and direct worktree evidence. Codex runs tests when appropriate. Claude's result is not treated as verification by itself.
-If Codex was woken by the thread heartbeat automation, do not decide from the heartbeat snapshot alone. Heartbeat may still show `running` while the task `status.json` is already `done`, or may lag in the other direction. Reconcile by reading `status --include-workers`, the specific task `status.json`, and the expected output files.
+If Codex was woken by the thread heartbeat automation, do not decide from the heartbeat snapshot alone. Heartbeat may still show `running` while the task `status.json` is already `done`, or may lag in the other direction. Reconcile by reading compact `status`, `status --task "<task-id>"`, and the expected output files.
 
 When all checkpoint tasks are terminal and direct Codex verification is complete, delete the thread-scoped heartbeat automation created for this delegation run. Do not delete the global launchd watcher.
 

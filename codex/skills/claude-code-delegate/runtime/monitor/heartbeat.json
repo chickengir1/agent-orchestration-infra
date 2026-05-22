@@ -1,14 +1,16 @@
 {
-  "checked_at": "2026-05-22T01:20:56Z",
+  "checked_at": "2026-05-22T01:30:58Z",
   "daemon_alive": false,
-  "daemon_pid": 66166,
-  "daemon_status": "stopped",
-  "done_tasks": 16,
+  "daemon_pid": null,
+  "daemon_status": null,
+  "done_tasks": 0,
   "failed_tasks": 0,
   "last_task": {
+    "group": "actor-runtime-contract-checkpoint",
     "id": "2b455f3d224c63bb",
+    "label": "wire-executor",
     "status": "done",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/2b455f3d224c63bb/task.md"
+    "updated_at": "2026-05-22T01:00:57Z"
   },
   "model": "opus",
   "queued_task_ids": [],
@@ -16,23 +18,7 @@
   "running_task_ids": [],
   "running_tasks": 0,
   "runtime_status": "stopped",
-  "stopped_tasks": 3,
+  "stopped_tasks": 0,
   "workdir": "/Users/leegangho/sbe-web-v4",
-  "workers": [
-    {
-      "id": 1,
-      "status": "idle",
-      "updated_at": "2026-05-22T01:00:58Z"
-    },
-    {
-      "id": 2,
-      "status": "idle",
-      "updated_at": "2026-05-22T01:00:25Z"
-    },
-    {
-      "id": 3,
-      "status": "idle",
-      "updated_at": "2026-05-22T00:58:51Z"
-    }
-  ]
+  "workers": 3
 }

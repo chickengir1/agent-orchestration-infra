@@ -41,9 +41,11 @@ TASKS_DIR = RUNTIME_DIR / "tasks"
 QUEUE_DIR = RUNTIME_DIR / "queue"
 WORKERS_DIR = RUNTIME_DIR / "workers"
 LOGS_DIR = RUNTIME_DIR / "logs"
+RUNS_DIR = RUNTIME_DIR / "runs"
 TERMINAL_TASK_STATES = {"done", "failed", "stopped", "removed", "dry-run"}
 ACTIVE_TASK_STATES = {"created", "queued", "running"}
 MANIFEST_SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 1
 REQUIRED_TASK_SECTIONS = [
     "Objective",
     "Allowed Read Paths",
@@ -184,7 +186,7 @@ def run_command(args: list[str], cwd: str, timeout: float | None = None) -> subp
 
 
 def ensure_dirs() -> None:
-    for path in (RUNTIME_DIR, TASKS_DIR, QUEUE_DIR, WORKERS_DIR, LOGS_DIR):
+    for path in (RUNTIME_DIR, TASKS_DIR, QUEUE_DIR, WORKERS_DIR, LOGS_DIR, RUNS_DIR):
         path.mkdir(parents=True, exist_ok=True)
 
 
@@ -227,6 +229,42 @@ def task_events_path(task_id: str) -> Path:
 
 def queue_item_path(task_id: str) -> Path:
     return QUEUE_DIR / f"{task_id}.json"
+
+
+def validate_run_id(run_id: str) -> str:
+    if not run_id:
+        raise SystemExit("run id is required")
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    if run_id in {".", ".."} or any(char not in allowed for char in run_id):
+        raise SystemExit(f"invalid run id: {run_id!r}")
+    return run_id
+
+
+def run_dir(run_id: str) -> Path:
+    return RUNS_DIR / validate_run_id(run_id)
+
+
+def run_manifest_path(run_id: str) -> Path:
+    return run_dir(run_id) / "manifest.json"
+
+
+def run_state_path(run_id: str) -> Path:
+    return run_dir(run_id) / "state.json"
+
+
+def run_events_path(run_id: str) -> Path:
+    return run_dir(run_id) / "events.jsonl"
+
+
+def run_summary_path(run_id: str) -> Path:
+    return run_dir(run_id) / "summary.json"
+
+
+def read_run_state(run_id: str) -> dict[str, Any]:
+    path = run_state_path(run_id)
+    if not path.exists():
+        raise SystemExit(f"run not found: {run_id}")
+    return read_json(path)
 
 
 def resolve_in_workdir(path: str, workdir: str) -> Path:
@@ -960,7 +998,13 @@ def read_manifest(path: str, workdir: str | None = None) -> dict[str, Any]:
     manifest_path = Path(path).expanduser()
     if not manifest_path.is_absolute() and workdir:
         manifest_path = Path(workdir) / manifest_path
-    return read_json(manifest_path.resolve(strict=False))
+    manifest_path = manifest_path.resolve(strict=False)
+    if not manifest_path.exists():
+        raise SystemExit(f"manifest not found: {manifest_path}")
+    try:
+        return read_json(manifest_path)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"invalid manifest JSON: {manifest_path}: {exc}") from exc
 
 
 def write_manifest(path: str, manifest: dict[str, Any], workdir: str | None = None) -> None:
@@ -1035,6 +1079,118 @@ def validate_manifest_data(manifest: dict[str, Any], strict: bool) -> dict[str, 
                 if errors and errors[-1].startswith("write path overlap"):
                     break
     return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
+def manifest_task_counts(manifest: dict[str, Any]) -> dict[str, int]:
+    tasks = manifest.get("tasks") if isinstance(manifest.get("tasks"), list) else []
+    counts: dict[str, int] = {"total": len(tasks)}
+    for task in tasks:
+        task_kind = str(task.get("task_kind") or "edit").replace("-", "_")
+        counts[task_kind] = counts.get(task_kind, 0) + 1
+    return {key: value for key, value in counts.items() if value}
+
+
+def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    tasks = manifest.get("tasks") if isinstance(manifest.get("tasks"), list) else []
+    summary = {
+        "schema_version": RUN_SCHEMA_VERSION,
+        "run_id": state["run_id"],
+        "status": state["status"],
+        "backend": state.get("backend"),
+        "workdir": state.get("workdir"),
+        "group": state.get("group"),
+        "tasks": {
+            "total": len(tasks),
+            "dispatched": sum(1 for task in tasks if task.get("runtime_task_id")),
+            "active": 0,
+            "done": 0,
+            "failed": 0,
+        },
+        "manifest_file": state.get("manifest_file"),
+        "next_action": "run_start" if state.get("status") == "created" else "inspect_run",
+        "metrics": {},
+    }
+    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    summary["metrics"]["summary_bytes"] = len(text.encode("utf-8"))
+    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    summary["metrics"]["summary_bytes"] = len(text.encode("utf-8"))
+    return summary
+
+
+def write_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    summary = build_run_summary(state, manifest)
+    write_json(run_summary_path(state["run_id"]), summary)
+    return summary
+
+
+def run_init(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    ensure_dirs()
+    run_id = validate_run_id(args.run_id)
+    source_manifest_path = Path(args.manifest).expanduser()
+    if not source_manifest_path.is_absolute():
+        source_manifest_path = (Path(args.workdir) / source_manifest_path).resolve(strict=False)
+    manifest = read_manifest(str(source_manifest_path))
+    validation = validate_manifest_data(manifest, args.strict)
+    if not validation["ok"]:
+        print(json.dumps(validation, indent=2, sort_keys=True))
+        raise SystemExit(1)
+    with RuntimeLock():
+        directory = run_dir(run_id)
+        if directory.exists() and not args.force:
+            raise SystemExit(f"run already exists: {run_id}")
+        if directory.exists() and args.force:
+            shutil.rmtree(directory)
+        directory.mkdir(parents=True, exist_ok=False)
+        copied_manifest = json.loads(json.dumps(manifest))
+        copied_manifest["source_manifest"] = str(source_manifest_path)
+        copied_manifest["run_id"] = run_id
+        copied_manifest["updated_at"] = now_iso()
+        write_json(run_manifest_path(run_id), copied_manifest)
+        state = {
+            "schema_version": RUN_SCHEMA_VERSION,
+            "run_id": run_id,
+            "status": "created",
+            "backend": args.backend,
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "workdir": copied_manifest.get("workdir"),
+            "group": copied_manifest.get("group"),
+            "manifest_file": str(run_manifest_path(run_id)),
+            "source_manifest": str(source_manifest_path),
+            "task_counts": manifest_task_counts(copied_manifest),
+        }
+        write_json(run_state_path(run_id), state)
+        append_jsonl(run_events_path(run_id), {"type": "run.created", "timestamp": state["created_at"], "run_id": run_id})
+        summary = write_run_summary(state, copied_manifest)
+    print(json.dumps({"run_id": run_id, "status": state["status"], "summary": summary}, indent=2, sort_keys=True))
+
+
+def run_status(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    state = read_run_state(args.run_id)
+    summary_path = run_summary_path(args.run_id)
+    summary = read_json(summary_path) if summary_path.exists() else None
+    output = {
+        "run_id": state.get("run_id"),
+        "status": state.get("status"),
+        "backend": state.get("backend"),
+        "workdir": state.get("workdir"),
+        "group": state.get("group"),
+        "task_counts": state.get("task_counts"),
+        "summary_file": str(summary_path),
+        "summary": summary,
+    }
+    print_status_json(output)
+
+
+def run_summary(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    _ = read_run_state(args.run_id)
+    path = run_summary_path(args.run_id)
+    if not path.exists():
+        raise SystemExit(f"run summary not found: {args.run_id}")
+    print(json.dumps(read_json(path), indent=2, sort_keys=True))
 
 
 def send(args: argparse.Namespace) -> None:
@@ -1135,6 +1291,66 @@ def summarize_task(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def compact_task(task: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "id": task.get("id"),
+            "label": task.get("label"),
+            "group": task.get("group"),
+            "status": task.get("status"),
+            "task_id": task.get("task_id"),
+            "updated_at": task.get("updated_at"),
+        }.items()
+        if value is not None
+    }
+
+
+def task_sort_value(task: dict[str, Any]) -> str:
+    return str(task.get("updated_at") or task.get("started_at") or task.get("queued_at") or task.get("created_at") or "")
+
+
+def count_tasks(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {"total": len(tasks), "active": 0}
+    for task in tasks:
+        status_name = str(task.get("status") or "unknown").replace("-", "_")
+        counts[status_name] = counts.get(status_name, 0) + 1
+        if task.get("status") in ACTIVE_TASK_STATES:
+            counts["active"] += 1
+    return {key: value for key, value in counts.items() if value}
+
+
+def next_status_action(runtime_status: str, daemon_alive: bool, tasks: list[dict[str, Any]]) -> str:
+    if not daemon_alive or runtime_status != "ready":
+        return "start_workers"
+    if any(task.get("status") in ACTIVE_TASK_STATES for task in tasks):
+        return "wait_or_check_later"
+    if any(task.get("status") == "failed" for task in tasks):
+        return "inspect_failed_tasks"
+    return "idle"
+
+
+def read_workers() -> list[dict[str, Any]]:
+    workers = []
+    for path in sorted(WORKERS_DIR.glob("worker-*.json")):
+        try:
+            workers.append(read_json(path))
+        except json.JSONDecodeError:
+            continue
+    return workers
+
+
+def print_status_json(output: dict[str, Any]) -> None:
+    metrics = output.setdefault("metrics", {})
+    for _ in range(4):
+        text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+        byte_count = len(text.encode("utf-8"))
+        if metrics.get("status_bytes") == byte_count:
+            break
+        metrics["status_bytes"] = byte_count
+    print(json.dumps(output, indent=2, sort_keys=True))
+
+
 def strip_accounting_fields(value: Any) -> Any:
     if isinstance(value, dict):
         return {
@@ -1166,23 +1382,71 @@ def status(args: argparse.Namespace) -> None:
         if daemon and not daemon_alive and state.get("status") == "ready":
             state = {**state, "status": "stopped", "stopped_at": daemon.get("updated_at") or now_iso(), "daemon_alive": False}
             write_state(state)
+    if args.task:
+        task = task_by_id(tasks, args.task)
+        if not task:
+            raise SystemExit(f"task not found: {args.task}")
+        output = {
+            "runtime_status": runtime_status,
+            "daemon_alive": daemon_alive,
+            "task": strip_accounting_fields(task) if args.verbose else summarize_task(task),
+        }
+        print_status_json(output)
+        return
+
+    sorted_tasks = sorted(tasks, key=task_sort_value, reverse=True)
+    active_tasks = [task for task in sorted_tasks if task.get("status") in ACTIVE_TASK_STATES]
+    if args.active_only:
+        output = {
+            "runtime_status": runtime_status,
+            "daemon_alive": daemon_alive,
+            "tasks": count_tasks(tasks),
+            "active_tasks": [summarize_task(task) for task in active_tasks],
+            "next_action": next_status_action(runtime_status, daemon_alive, tasks),
+        }
+        if args.include_workers:
+            output["worker_status"] = [compact_task(worker) for worker in read_workers()]
+        print_status_json(output)
+        return
+
+    if args.verbose or args.all:
+        output = {
+            **state,
+            "runtime_status": runtime_status,
+            "daemon_alive": daemon_alive,
+            "daemon": daemon,
+            "tasks": strip_accounting_fields(tasks) if args.verbose else [summarize_task(task) for task in tasks],
+            "thread_heartbeat_automation": thread_heartbeat_automation_state(tasks),
+        }
+        if args.include_workers:
+            output["workers"] = read_workers()
+        print_status_json(output)
+        return
+
+    last_task = task_by_id(tasks, state.get("last_task", {}).get("id")) if isinstance(state.get("last_task"), dict) else None
+    if not last_task and sorted_tasks:
+        last_task = sorted_tasks[0]
+    active_task_ids = [task["id"] for task in sorted_tasks if task.get("status") in ACTIVE_TASK_STATES]
     output = {
-        **state,
+        "mode": state.get("mode"),
         "runtime_status": runtime_status,
         "daemon_alive": daemon_alive,
-        "daemon": daemon,
-        "tasks": strip_accounting_fields(tasks) if args.verbose else [summarize_task(task) for task in tasks],
-        "thread_heartbeat_automation": thread_heartbeat_automation_state(tasks),
+        "workdir": state.get("workdir"),
+        "workers": state.get("workers"),
+        "model": state.get("model"),
+        "tasks": count_tasks(tasks),
+        "last_task": compact_task(last_task) if last_task else None,
+        "heartbeat": {
+            "delete_ready": not active_task_ids,
+            "active_task_ids": active_task_ids,
+        },
+        "next_action": next_status_action(runtime_status, daemon_alive, tasks),
     }
+    if args.history:
+        output["history"] = [summarize_task(task) for task in sorted_tasks[: args.limit]]
     if args.include_workers:
-        workers = []
-        for path in sorted(WORKERS_DIR.glob("worker-*.json")):
-            try:
-                workers.append(read_json(path))
-            except json.JSONDecodeError:
-                continue
-        output["workers"] = workers
-    print(json.dumps(output, indent=2, sort_keys=True))
+        output["worker_status"] = [compact_task(worker) for worker in read_workers()]
+    print_status_json(output)
 
 
 def stop(args: argparse.Namespace) -> None:
@@ -1418,6 +1682,11 @@ def main() -> int:
     p = sub.add_parser("status")
     p.add_argument("--include-workers", action="store_true")
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--all", action="store_true", help="print all task summaries instead of compact runtime status")
+    p.add_argument("--history", action="store_true", help="include recent task history in compact status")
+    p.add_argument("--active-only", action="store_true", help="print only active tasks with compact runtime status")
+    p.add_argument("--limit", type=int, default=10, help="number of history tasks to include with --history")
+    p.add_argument("--task", help="print one task by id")
     p.set_defaults(func=status)
 
     p = sub.add_parser("stop")
@@ -1473,6 +1742,26 @@ def main() -> int:
     mp.add_argument("--manifest", required=True)
     mp.add_argument("--strict", action="store_true")
     mp.set_defaults(func=manifest_validate)
+
+    p = sub.add_parser("run")
+    run_sub = p.add_subparsers(dest="run_cmd", required=True)
+
+    rp = run_sub.add_parser("init")
+    rp.add_argument("--run-id", required=True)
+    rp.add_argument("--backend", default="claude-code", choices=["claude-code"])
+    rp.add_argument("--manifest", required=True)
+    rp.add_argument("--workdir", default=os.getcwd())
+    rp.add_argument("--strict", action="store_true")
+    rp.add_argument("--force", action="store_true")
+    rp.set_defaults(func=run_init)
+
+    rp = run_sub.add_parser("status")
+    rp.add_argument("run_id")
+    rp.set_defaults(func=run_status)
+
+    rp = run_sub.add_parser("summary")
+    rp.add_argument("run_id")
+    rp.set_defaults(func=run_summary)
 
     p = sub.add_parser("dispatch", help="dispatch a validated manifest")
     p.add_argument("--manifest", required=True)
