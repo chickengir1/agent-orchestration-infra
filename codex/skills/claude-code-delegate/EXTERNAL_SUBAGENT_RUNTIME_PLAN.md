@@ -425,7 +425,9 @@ Changes:
 - Validate heartbeat automation id.
 - Validate manifest.
 - Dispatch manifest tasks.
-- Record runtime task ids in run state.
+- Record runtime task ids in run state, run manifest, and run summary.
+- Reuse the same dispatch helper as direct `dispatch --manifest`.
+- Refresh run summary task counts from only that run's referenced task status files.
 
 Verification:
 
@@ -433,6 +435,8 @@ Verification:
 - missing heartbeat automation id is rejected.
 - invalid automation TOML is rejected.
 - overlapping write paths fail before dispatch.
+- `run summary <run-id>` reports dispatched and active task counts after start.
+- after a task reaches `done`, `run summary <run-id>` reports updated done/active counts without scanning historical task records.
 
 ### Checkpoint 4: Run Supervise
 

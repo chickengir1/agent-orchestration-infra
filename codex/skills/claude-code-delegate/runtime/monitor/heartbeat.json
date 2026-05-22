@@ -1,16 +1,16 @@
 {
-  "checked_at": "2026-05-22T01:30:58Z",
+  "checked_at": "2026-05-22T01:41:00Z",
   "daemon_alive": false,
   "daemon_pid": null,
   "daemon_status": null,
   "done_tasks": 0,
   "failed_tasks": 0,
   "last_task": {
-    "group": "actor-runtime-contract-checkpoint",
-    "id": "2b455f3d224c63bb",
-    "label": "wire-executor",
-    "status": "done",
-    "updated_at": "2026-05-22T01:00:57Z"
+    "group": "run-start-smoke",
+    "id": "9be7cd7005ce3c57",
+    "label": "actual-one",
+    "status": "removed",
+    "updated_at": "2026-05-22T01:39:24Z"
   },
   "model": "opus",
   "queued_task_ids": [],

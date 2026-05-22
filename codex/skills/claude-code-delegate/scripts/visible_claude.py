@@ -1092,6 +1092,18 @@ def manifest_task_counts(manifest: dict[str, Any]) -> dict[str, int]:
 
 def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     tasks = manifest.get("tasks") if isinstance(manifest.get("tasks"), list) else []
+    task_statuses: list[str] = []
+    for manifest_task in tasks:
+        runtime_task_id = manifest_task.get("runtime_task_id")
+        if not runtime_task_id:
+            continue
+        path = task_status_path(str(runtime_task_id))
+        if not path.exists():
+            continue
+        try:
+            task_statuses.append(str(read_json(path).get("status") or "unknown"))
+        except (OSError, json.JSONDecodeError):
+            task_statuses.append("unknown")
     summary = {
         "schema_version": RUN_SCHEMA_VERSION,
         "run_id": state["run_id"],
@@ -1102,12 +1114,12 @@ def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[s
         "tasks": {
             "total": len(tasks),
             "dispatched": sum(1 for task in tasks if task.get("runtime_task_id")),
-            "active": 0,
-            "done": 0,
-            "failed": 0,
+            "active": sum(1 for status_name in task_statuses if status_name in ACTIVE_TASK_STATES),
+            "done": sum(1 for status_name in task_statuses if status_name == "done"),
+            "failed": sum(1 for status_name in task_statuses if status_name == "failed"),
         },
         "manifest_file": state.get("manifest_file"),
-        "next_action": "run_start" if state.get("status") == "created" else "inspect_run",
+        "next_action": "run_start" if state.get("status") == "created" else "check_status",
         "metrics": {},
     }
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
@@ -1169,8 +1181,9 @@ def run_init(args: argparse.Namespace) -> None:
 def run_status(args: argparse.Namespace) -> None:
     require_unsandboxed()
     state = read_run_state(args.run_id)
+    manifest = read_json(run_manifest_path(args.run_id))
     summary_path = run_summary_path(args.run_id)
-    summary = read_json(summary_path) if summary_path.exists() else None
+    summary = write_run_summary(state, manifest)
     output = {
         "run_id": state.get("run_id"),
         "status": state.get("status"),
@@ -1186,11 +1199,122 @@ def run_status(args: argparse.Namespace) -> None:
 
 def run_summary(args: argparse.Namespace) -> None:
     require_unsandboxed()
-    _ = read_run_state(args.run_id)
-    path = run_summary_path(args.run_id)
-    if not path.exists():
-        raise SystemExit(f"run summary not found: {args.run_id}")
-    print(json.dumps(read_json(path), indent=2, sort_keys=True))
+    state = read_run_state(args.run_id)
+    manifest = read_json(run_manifest_path(args.run_id))
+    print(json.dumps(write_run_summary(state, manifest), indent=2, sort_keys=True))
+
+
+def dispatch_manifest_tasks(
+    state: dict[str, Any],
+    manifest: dict[str, Any],
+    strict: bool,
+    force: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
+        raise SystemExit("Claude SDK worker runtime is not ready; run start first")
+    info = daemon_info()
+    if not info or not info.get("alive"):
+        raise SystemExit("Claude SDK worker daemon is not running; run start")
+    validation = validate_manifest_data(manifest, strict)
+    if not validation["ok"]:
+        print(json.dumps(validation, indent=2, sort_keys=True))
+        raise SystemExit(1)
+    if manifest.get("workdir") != state.get("workdir"):
+        raise SystemExit(f"manifest workdir does not match active runtime: {manifest.get('workdir')} != {state.get('workdir')}")
+    runtime_ids: dict[str, str] = {
+        task["id"]: task["runtime_task_id"]
+        for task in manifest.get("tasks") or []
+        if task.get("runtime_task_id")
+    }
+    dispatched: list[dict[str, Any]] = []
+    for manifest_task in manifest.get("tasks") or []:
+        manifest_id = manifest_task["id"]
+        if manifest_task.get("runtime_task_id") and not force:
+            dispatched.append({"id": manifest_id, "runtime_task_id": manifest_task["runtime_task_id"], "status": "already-dispatched"})
+            continue
+        missing_deps = [dep for dep in manifest_task.get("depends_on") or [] if dep not in runtime_ids]
+        if missing_deps:
+            raise SystemExit(f"{manifest_id}: dependencies are not dispatched yet: {', '.join(missing_deps)}")
+        runtime_dep_ids = [runtime_ids[dep] for dep in manifest_task.get("depends_on") or []]
+        prompt = Path(manifest_task["prompt_file"]).read_text()
+        prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        existing = existing_task_for(prompt_sha256, state["workdir"])
+        if existing and not force:
+            runtime_ids[manifest_id] = existing["id"]
+            manifest_task["runtime_task_id"] = existing["id"]
+            manifest_task["dispatched_at"] = manifest_task.get("dispatched_at") or now_iso()
+            dispatched.append({"id": manifest_id, "runtime_task_id": existing["id"], "status": existing.get("status"), "existing": True})
+            continue
+        conflicts = active_write_conflicts(manifest_task.get("write_paths") or [], runtime_dep_ids, state["workdir"])
+        if conflicts:
+            raise SystemExit(f"{manifest_id}: overlapping active write paths: {', '.join(conflicts)}")
+        task_id, task = create_task(
+            state,
+            prompt,
+            force,
+            manifest_task.get("read_paths") or [],
+            manifest_task.get("write_paths") or [],
+            runtime_dep_ids,
+            manifest_task.get("label") or manifest_id,
+            manifest.get("group"),
+        )
+        queued_order = now_order()
+        task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order, manifest_id=manifest_id)
+        write_json(
+            queue_item_path(task_id),
+            {
+                "task_id": task_id,
+                "queued_at": task["updated_at"],
+                "queued_order": queued_order,
+                "depends_on": task.get("depends_on") or [],
+            },
+        )
+        state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
+        runtime_ids[manifest_id] = task_id
+        manifest_task["runtime_task_id"] = task_id
+        manifest_task["dispatched_at"] = now_iso()
+        dispatched.append({"id": manifest_id, "runtime_task_id": task_id, "status": "queued"})
+    manifest["updated_at"] = now_iso()
+    return dispatched, manifest, state
+
+
+def run_start(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    require_thread_heartbeat_automation(args.thread_heartbeat_automation_id)
+    run_id = validate_run_id(args.run_id)
+    with RuntimeLock():
+        run_state = read_run_state(run_id)
+        if run_state.get("backend") != "claude-code":
+            raise SystemExit(f"unsupported run backend: {run_state.get('backend')}")
+        state = read_state()
+        manifest = read_json(run_manifest_path(run_id))
+        append_jsonl(run_events_path(run_id), {"type": "run.dispatching", "timestamp": now_iso(), "run_id": run_id})
+        dispatched, manifest, state = dispatch_manifest_tasks(state, manifest, args.strict, args.force)
+        run_state.update(
+            {
+                "status": "running",
+                "updated_at": now_iso(),
+                "started_at": run_state.get("started_at") or now_iso(),
+                "thread_heartbeat_automation_id": args.thread_heartbeat_automation_id,
+                "tasks": [
+                    {
+                        "manifest_id": task.get("id"),
+                        "runtime_task_id": task.get("runtime_task_id"),
+                        "label": task.get("label"),
+                    }
+                    for task in manifest.get("tasks") or []
+                ],
+            }
+        )
+        write_json(run_manifest_path(run_id), manifest)
+        write_json(run_state_path(run_id), run_state)
+        write_state(state)
+        append_jsonl(
+            run_events_path(run_id),
+            {"type": "run.running", "timestamp": run_state["updated_at"], "run_id": run_id, "dispatched": dispatched},
+        )
+        summary = write_run_summary(run_state, manifest)
+    print(json.dumps({"run_id": run_id, "status": run_state["status"], "dispatched": dispatched, "summary": summary}, indent=2, sort_keys=True))
 
 
 def send(args: argparse.Namespace) -> None:
@@ -1580,72 +1704,8 @@ def dispatch_manifest(args: argparse.Namespace) -> None:
     require_thread_heartbeat_automation(args.thread_heartbeat_automation_id)
     with RuntimeLock():
         state = read_state()
-        if state.get("mode") != "sdk-worker-pool" or state.get("status") != "ready":
-            raise SystemExit("Claude SDK worker runtime is not ready; run start first")
-        info = daemon_info()
-        if not info or not info.get("alive"):
-            raise SystemExit("Claude SDK worker daemon is not running; run start")
         manifest = read_manifest(args.manifest)
-        validation = validate_manifest_data(manifest, args.strict)
-        if not validation["ok"]:
-            print(json.dumps(validation, indent=2, sort_keys=True))
-            raise SystemExit(1)
-        if manifest.get("workdir") != state.get("workdir"):
-            raise SystemExit(f"manifest workdir does not match active runtime: {manifest.get('workdir')} != {state.get('workdir')}")
-        runtime_ids: dict[str, str] = {
-            task["id"]: task["runtime_task_id"]
-            for task in manifest.get("tasks") or []
-            if task.get("runtime_task_id")
-        }
-        dispatched: list[dict[str, Any]] = []
-        for manifest_task in manifest.get("tasks") or []:
-            manifest_id = manifest_task["id"]
-            if manifest_task.get("runtime_task_id") and not args.force:
-                dispatched.append({"id": manifest_id, "runtime_task_id": manifest_task["runtime_task_id"], "status": "already-dispatched"})
-                continue
-            missing_deps = [dep for dep in manifest_task.get("depends_on") or [] if dep not in runtime_ids]
-            if missing_deps:
-                raise SystemExit(f"{manifest_id}: dependencies are not dispatched yet: {', '.join(missing_deps)}")
-            runtime_dep_ids = [runtime_ids[dep] for dep in manifest_task.get("depends_on") or []]
-            prompt = Path(manifest_task["prompt_file"]).read_text()
-            prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            existing = existing_task_for(prompt_sha256, state["workdir"])
-            if existing and not args.force:
-                runtime_ids[manifest_id] = existing["id"]
-                manifest_task["runtime_task_id"] = existing["id"]
-                manifest_task["dispatched_at"] = manifest_task.get("dispatched_at") or now_iso()
-                dispatched.append({"id": manifest_id, "runtime_task_id": existing["id"], "status": existing.get("status"), "existing": True})
-                continue
-            conflicts = active_write_conflicts(manifest_task.get("write_paths") or [], runtime_dep_ids, state["workdir"])
-            if conflicts:
-                raise SystemExit(f"{manifest_id}: overlapping active write paths: {', '.join(conflicts)}")
-            task_id, task = create_task(
-                state,
-                prompt,
-                args.force,
-                manifest_task.get("read_paths") or [],
-                manifest_task.get("write_paths") or [],
-                runtime_dep_ids,
-                manifest_task.get("label") or manifest_id,
-                manifest.get("group"),
-            )
-            queued_order = now_order()
-            task = update_task(task, "queued", queued_at=now_iso(), queued_order=queued_order, manifest_id=manifest_id)
-            write_json(
-                queue_item_path(task_id),
-                {
-                    "task_id": task_id,
-                    "queued_at": task["updated_at"],
-                    "queued_order": queued_order,
-                    "depends_on": task.get("depends_on") or [],
-                },
-            )
-            state["last_task"] = {"id": task_id, "status": task["status"], "task_file": task.get("task_file")}
-            runtime_ids[manifest_id] = task_id
-            manifest_task["runtime_task_id"] = task_id
-            manifest_task["dispatched_at"] = now_iso()
-            dispatched.append({"id": manifest_id, "runtime_task_id": task_id, "status": "queued"})
-        manifest["updated_at"] = now_iso()
+        dispatched, manifest, state = dispatch_manifest_tasks(state, manifest, args.strict, args.force)
         write_manifest(args.manifest, manifest)
         write_state(state)
     print(json.dumps({"dispatched": dispatched, "manifest": args.manifest}, indent=2, sort_keys=True))
@@ -1762,6 +1822,13 @@ def main() -> int:
     rp = run_sub.add_parser("summary")
     rp.add_argument("run_id")
     rp.set_defaults(func=run_summary)
+
+    rp = run_sub.add_parser("start")
+    rp.add_argument("run_id")
+    rp.add_argument("--strict", action="store_true")
+    rp.add_argument("--force", action="store_true")
+    rp.add_argument("--thread-heartbeat-automation-id", required=True, help="required; must name an ACTIVE thread heartbeat automation")
+    rp.set_defaults(func=run_start)
 
     p = sub.add_parser("dispatch", help="dispatch a validated manifest")
     p.add_argument("--manifest", required=True)
