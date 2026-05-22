@@ -94,7 +94,13 @@ Do not use Claude output as final verification. Claude may produce useful work, 
 
 Preflight verifies unsandboxed execution, runtime write access, Claude Code availability, and the Python SDK runtime. It also triggers the local `claude-delegate-watch` launchd watcher once, so `runtime/monitor/heartbeat.json` is refreshed before work starts.
 
-Codex must also create a thread-scoped heartbeat automation before any non-dry-run `send` or `dispatch` in this skill. That automation is a Codex app/thread concern. It must read `runtime/monitor/heartbeat.json`, report `checked_at`, daemon status, runtime status, running/queued task ids, and `last_task`, then let Codex resume normal status verification. Keep this thread-scoped automation active while any task is `created`, `queued`, or `running`.
+Codex must also create a thread-scoped heartbeat automation before any non-dry-run `send` or `dispatch` in this skill. That automation is a Codex app/thread concern. Use the canonical prompt from:
+
+```bash
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py heartbeat-prompt
+```
+
+The heartbeat prompt must treat heartbeat as a wake trigger only. If direct `status --include-workers` shows any task is `created`, `queued`, or `running`, it must respond with `DONT_NOTIFY`, skip artifact inspection, and keep the automation. Only when no active tasks remain should it inspect task status and artifacts, then delete the thread-scoped automation after verification.
 The script enforces this lifecycle gate: non-dry-run `send` and `dispatch` require `--thread-heartbeat-automation-id <automation-id>`. The script reads `~/.codex/automations/<automation-id>/automation.toml` and rejects dispatch unless it is an `ACTIVE` heartbeat automation, has a `target_thread_id`, and its prompt mentions this skill's heartbeat file.
 
 Treat heartbeat automation as a wake trigger, not as the source of truth. The heartbeat file may be one sampling interval behind task reality. When a heartbeat wakes Codex, immediately re-read direct task state with `status --include-workers` and the relevant `runtime/tasks/<task-id>/status.json`, then inspect artifacts. If task state and heartbeat disagree, trust the task status files and direct artifacts, optionally refresh the watcher once, and only delete the thread-scoped automation after direct verification is complete.

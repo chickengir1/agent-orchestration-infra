@@ -1241,6 +1241,21 @@ def template(args: argparse.Namespace) -> None:
     print(TASK_TEMPLATE.rstrip())
 
 
+def heartbeat_prompt(args: argparse.Namespace) -> None:
+    print(
+        f"""Read {MONITOR_HEARTBEAT_FILE}.
+
+Treat this heartbeat as a wake trigger only, not as completion proof.
+
+Immediately run:
+{Path(__file__).resolve()} status --include-workers
+
+If any task is created, queued, or running, respond with DONT_NOTIFY and do not inspect artifacts or delete this automation.
+
+If there are no active tasks, re-read the latest task's status.json and inspect the expected artifacts from its task file or manifest. If the task is done and direct artifact verification succeeds, refresh the watcher once if heartbeat is stale, delete this thread-scoped automation, then notify the user. If the task failed or stopped, notify the user with the task id and status. Do not delete the global launchd watcher."""
+    )
+
+
 def validate_task(args: argparse.Namespace) -> None:
     require_unsandboxed()
     result = validate_task_contract(args.prompt_file, args.read_path, args.write_path, args.workdir, args.strict)
@@ -1420,6 +1435,9 @@ def main() -> int:
 
     p = sub.add_parser("template")
     p.set_defaults(func=template)
+
+    p = sub.add_parser("heartbeat-prompt")
+    p.set_defaults(func=heartbeat_prompt)
 
     p = sub.add_parser("validate-task")
     p.add_argument("--workdir", default=os.getcwd())

@@ -1,16 +1,16 @@
 {
   "claude_version": "2.1.146 (Claude Code)",
-  "daemon_pid": 61813,
+  "daemon_pid": 16356,
   "last_task": {
-    "id": "913732ccaa657fe4",
+    "id": "edd825b05dd25ff4",
     "status": "queued",
-    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/913732ccaa657fe4/task.md"
+    "task_file": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks/edd825b05dd25ff4/task.md"
   },
   "mode": "sdk-worker-pool",
   "model": "opus",
   "queue_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/queue",
   "runtime_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime",
-  "started_at": "2026-05-21T09:16:39Z",
+  "started_at": "2026-05-22T00:00:37Z",
   "status": "ready",
   "tasks_dir": "/Users/leegangho/.codex/skills/claude-code-delegate/runtime/tasks",
   "workdir": "/Users/leegangho/sbe-web-v4",
