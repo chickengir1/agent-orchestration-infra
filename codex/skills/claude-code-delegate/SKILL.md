@@ -75,7 +75,7 @@ Default large-change loop:
 5. Validate the manifest in strict mode.
 6. Start up to 3 workers.
 7. Dispatch the manifest. Do not manually dispatch broad or unvalidated tasks for large work.
-8. Continue local Codex work or discussion without waiting.
+8. Continue local Codex work or discussion without waiting. While Codex is already active, do not expect heartbeat automation to interrupt a running assistant turn or blocking tool call; Codex should check status directly at natural checkpoints.
 9. Run `status --include-workers` at checkpoints.
 10. For `done` tasks, inspect and verify artifacts directly with Codex.
 11. For `failed` tasks, inspect events and split smaller; do not resend the same broad task.
@@ -100,10 +100,10 @@ Codex must also create a thread-scoped heartbeat automation before any non-dry-r
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py heartbeat-prompt
 ```
 
-The heartbeat prompt must treat heartbeat as a wake trigger only. If direct `status --include-workers` shows any task is `created`, `queued`, or `running`, it must respond with `DONT_NOTIFY`, skip artifact inspection, and keep the automation. Only when no active tasks remain should it inspect task status and artifacts, then delete the thread-scoped automation after verification.
+The heartbeat prompt must treat heartbeat as a cold/idle wake trigger only. It is not an active-turn interrupt mechanism. If direct `status --include-workers` shows any task is `created`, `queued`, or `running`, it must respond with `DONT_NOTIFY`, skip artifact inspection, and keep the automation. Only when no active tasks remain should it inspect task status and artifacts, then delete the thread-scoped automation after verification.
 The script enforces this lifecycle gate: non-dry-run `send` and `dispatch` require `--thread-heartbeat-automation-id <automation-id>`. The script reads `~/.codex/automations/<automation-id>/automation.toml` and rejects dispatch unless it is an `ACTIVE` heartbeat automation, has a `target_thread_id`, and its prompt mentions this skill's heartbeat file.
 
-Treat heartbeat automation as a wake trigger, not as the source of truth. The heartbeat file may be one sampling interval behind task reality. When a heartbeat wakes Codex, immediately re-read direct task state with `status --include-workers` and the relevant `runtime/tasks/<task-id>/status.json`, then inspect artifacts. If task state and heartbeat disagree, trust the task status files and direct artifacts, optionally refresh the watcher once, and only delete the thread-scoped automation after direct verification is complete.
+Treat heartbeat automation as a wake trigger, not as the source of truth. The heartbeat file may be one sampling interval behind task reality. When a heartbeat wakes Codex, immediately re-read direct task state with `status --include-workers` and the relevant `runtime/tasks/<task-id>/status.json`, then inspect artifacts. If task state and heartbeat disagree, trust the task status files and direct artifacts, optionally refresh the watcher once, and only delete the thread-scoped automation after direct verification is complete. If Codex is already active in the foreground, direct status checks are the delivery path; heartbeat may not arrive until the active turn is over.
 
 2. Start the persistent worker pool.
 
@@ -166,7 +166,7 @@ Concurrent `send` invocations are serialized by a runtime lock before they creat
 Lifecycle commands that mutate runtime state (`start`, `send`, `status`, `stop`, and `rm`) use the same runtime lock, so start/stop/status transitions cannot interleave with task creation.
 Use `--read-path` and `--write-path` for bounded tasks. If omitted, both default to the workdir. Prefer file-level read paths: target file, direct dependency files, and the specific acceptance/test file Codex will later run. Do not pass broad source directories unless the task truly requires discovery. Write paths are automatically readable, so the target file does not need to be duplicated as a read path. The worker denies tool calls outside the recorded paths.
 Use `--depends-on` to connect tasks. A dependent task stays queued until every dependency is `done`. If any dependency reaches a terminal non-`done` state or is missing, the dependent task becomes `failed`; it is not retried or auto-rerouted.
-After `send`, Codex must keep the conversation available. Do not wait inline for Claude completion; use a later `status` checkpoint.
+After `send`, Codex must keep the conversation available. Do not block the user solely waiting for Claude completion; use a later `status` checkpoint while continuing useful local work or discussion.
 
 6. For large work, use a manifest instead of direct `send`.
 
@@ -246,7 +246,7 @@ When all checkpoint tasks are terminal and direct Codex verification is complete
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py rm "<task-id>"
 ```
 
-`stop --workers` marks queued/running tasks as `stopped`, removes their queue items, and stops the daemon.
+`stop --workers` marks queued/running tasks as `stopped`, removes their queue items, and stops the daemon. Do not stop the daemon after every successful task by habit; keeping it warm is useful across nearby checkpoints. Stop it when ending the delegation session, changing workdirs, cleaning runtime state, or preventing further background edits.
 
 ## Hard Rules
 
@@ -256,7 +256,7 @@ Do not inject work into Claude by writing to a PTY, FIFO, paste buffer, Remote C
 
 Do not use `claude --bg` as the ordinary dispatch path. This experimental skill uses only the persistent Claude Agent SDK worker pool.
 
-Do not block the Codex conversation waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints.
+Do not block the Codex conversation solely waiting for Claude completion after `send`. Completion is discovered by explicit `status` checkpoints or by a cold/idle heartbeat wake followed by direct verification.
 
 Do not dispatch delegated work without first creating the thread-scoped heartbeat automation for this Codex conversation. Pass its actual automation id to `send` or `dispatch` with `--thread-heartbeat-automation-id`. Delete that thread-scoped automation after all active delegated work is terminal and verified.
 

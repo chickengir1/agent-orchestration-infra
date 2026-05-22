@@ -1246,6 +1246,7 @@ def heartbeat_prompt(args: argparse.Namespace) -> None:
         f"""Read {MONITOR_HEARTBEAT_FILE}.
 
 Treat this heartbeat as a wake trigger only, not as completion proof.
+It is intended for cold/idle Codex threads and does not guarantee interruption of an active assistant turn or blocking tool call.
 
 Immediately run:
 {Path(__file__).resolve()} status --include-workers
@@ -1387,7 +1388,7 @@ def dispatch_manifest(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Manage the Claude Code delegate SDK worker pool.")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("preflight")
@@ -1401,7 +1402,7 @@ def main() -> int:
     p.add_argument("--clean-runtime", action="store_true")
     p.set_defaults(func=start)
 
-    p = sub.add_parser("send")
+    p = sub.add_parser("send", help="enqueue one bounded task file")
     p.add_argument("prompt", nargs="?")
     p.add_argument("--prompt-file")
     p.add_argument("--read-path", action="append")
@@ -1411,7 +1412,7 @@ def main() -> int:
     p.add_argument("--group")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--force-new", action="store_true")
-    p.add_argument("--thread-heartbeat-automation-id")
+    p.add_argument("--thread-heartbeat-automation-id", help="required for non-dry-run dispatch; must name an ACTIVE thread heartbeat automation")
     p.set_defaults(func=send)
 
     p = sub.add_parser("status")
@@ -1433,10 +1434,10 @@ def main() -> int:
     p.add_argument("--model", required=True)
     p.set_defaults(func=daemon)
 
-    p = sub.add_parser("template")
+    p = sub.add_parser("template", help="print the bounded Claude task template")
     p.set_defaults(func=template)
 
-    p = sub.add_parser("heartbeat-prompt")
+    p = sub.add_parser("heartbeat-prompt", help="print the canonical Codex thread heartbeat automation prompt")
     p.set_defaults(func=heartbeat_prompt)
 
     p = sub.add_parser("validate-task")
@@ -1473,11 +1474,11 @@ def main() -> int:
     mp.add_argument("--strict", action="store_true")
     mp.set_defaults(func=manifest_validate)
 
-    p = sub.add_parser("dispatch")
+    p = sub.add_parser("dispatch", help="dispatch a validated manifest")
     p.add_argument("--manifest", required=True)
     p.add_argument("--strict", action="store_true")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--thread-heartbeat-automation-id")
+    p.add_argument("--thread-heartbeat-automation-id", help="required; must name an ACTIVE thread heartbeat automation")
     p.set_defaults(func=dispatch_manifest)
 
     args = parser.parse_args()
