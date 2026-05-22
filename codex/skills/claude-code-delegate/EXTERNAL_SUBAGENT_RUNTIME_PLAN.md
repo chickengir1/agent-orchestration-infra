@@ -443,13 +443,13 @@ Verification:
 Changes:
 
 - Add `run supervise`.
-- Read task states.
-- Move run through `running -> verifying -> verified|failed`.
+- Read only task states referenced by the run manifest.
+- Move run through `running -> verifying|failed`.
 - Write compact summary.
 
 Verification:
 
-- done task produces verified summary.
+- done task produces verifying summary.
 - failed task produces failed summary.
 - active task returns running without verbose task dump.
 

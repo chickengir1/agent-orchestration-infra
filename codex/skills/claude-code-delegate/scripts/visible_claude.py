@@ -1090,20 +1090,71 @@ def manifest_task_counts(manifest: dict[str, Any]) -> dict[str, int]:
     return {key: value for key, value in counts.items() if value}
 
 
-def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+def run_task_states(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    states: list[dict[str, Any]] = []
     tasks = manifest.get("tasks") if isinstance(manifest.get("tasks"), list) else []
-    task_statuses: list[str] = []
     for manifest_task in tasks:
         runtime_task_id = manifest_task.get("runtime_task_id")
-        if not runtime_task_id:
-            continue
-        path = task_status_path(str(runtime_task_id))
-        if not path.exists():
-            continue
-        try:
-            task_statuses.append(str(read_json(path).get("status") or "unknown"))
-        except (OSError, json.JSONDecodeError):
-            task_statuses.append("unknown")
+        task_state: dict[str, Any] = {
+            "manifest_id": manifest_task.get("id"),
+            "runtime_task_id": runtime_task_id,
+            "label": manifest_task.get("label"),
+            "status": "not_dispatched",
+        }
+        if runtime_task_id:
+            path = task_status_path(str(runtime_task_id))
+            if path.exists():
+                try:
+                    runtime_task = read_json(path)
+                    task_state.update(
+                        {
+                            "status": runtime_task.get("status") or "unknown",
+                            "updated_at": runtime_task.get("updated_at"),
+                            "worker_id": runtime_task.get("worker_id"),
+                        }
+                    )
+                except (OSError, json.JSONDecodeError):
+                    task_state["status"] = "unknown"
+            else:
+                task_state["status"] = "missing"
+        states.append({key: value for key, value in task_state.items() if value is not None})
+    return states
+
+
+def run_task_count_summary(task_states: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {
+        "total": len(task_states),
+        "dispatched": sum(1 for task in task_states if task.get("runtime_task_id")),
+        "active": sum(1 for task in task_states if task.get("status") in ACTIVE_TASK_STATES),
+        "done": sum(1 for task in task_states if task.get("status") == "done"),
+        "failed": sum(1 for task in task_states if task.get("status") == "failed"),
+    }
+    terminal_non_done = {
+        status_name
+        for status_name in TERMINAL_TASK_STATES
+        if status_name not in {"done", "dry-run", "removed"}
+    }
+    counts["terminal_non_done"] = sum(1 for task in task_states if task.get("status") in terminal_non_done)
+    counts["not_dispatched"] = sum(1 for task in task_states if task.get("status") == "not_dispatched")
+    return {key: value for key, value in counts.items() if value}
+
+
+def run_next_action(status_name: str, task_counts: dict[str, int]) -> str:
+    if status_name == "created":
+        return "run_start"
+    if status_name == "running":
+        return "check_status" if task_counts.get("active") else "run_supervise"
+    if status_name == "verifying":
+        return "verify_artifacts"
+    if status_name == "failed":
+        return "inspect_failed_tasks"
+    return "inspect_run"
+
+
+def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    tasks = manifest.get("tasks") if isinstance(manifest.get("tasks"), list) else []
+    task_states = run_task_states(manifest)
+    task_counts = run_task_count_summary(task_states)
     summary = {
         "schema_version": RUN_SCHEMA_VERSION,
         "run_id": state["run_id"],
@@ -1111,15 +1162,9 @@ def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[s
         "backend": state.get("backend"),
         "workdir": state.get("workdir"),
         "group": state.get("group"),
-        "tasks": {
-            "total": len(tasks),
-            "dispatched": sum(1 for task in tasks if task.get("runtime_task_id")),
-            "active": sum(1 for status_name in task_statuses if status_name in ACTIVE_TASK_STATES),
-            "done": sum(1 for status_name in task_statuses if status_name == "done"),
-            "failed": sum(1 for status_name in task_statuses if status_name == "failed"),
-        },
+        "tasks": {"total": len(tasks), **task_counts},
         "manifest_file": state.get("manifest_file"),
-        "next_action": "run_start" if state.get("status") == "created" else "check_status",
+        "next_action": run_next_action(str(state.get("status") or "unknown"), task_counts),
         "metrics": {},
     }
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
@@ -1315,6 +1360,72 @@ def run_start(args: argparse.Namespace) -> None:
         )
         summary = write_run_summary(run_state, manifest)
     print(json.dumps({"run_id": run_id, "status": run_state["status"], "dispatched": dispatched, "summary": summary}, indent=2, sort_keys=True))
+
+
+def supervise_run_state(state: dict[str, Any], manifest: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, int]]:
+    task_states = run_task_states(manifest)
+    counts = run_task_count_summary(task_states)
+    current_status = state.get("status")
+    next_status = current_status
+    if counts.get("failed") or counts.get("terminal_non_done"):
+        next_status = "failed"
+    elif counts.get("active") or counts.get("not_dispatched") or counts.get("dispatched", 0) < counts.get("total", 0):
+        next_status = "running" if current_status != "created" else "created"
+    elif counts.get("total") and counts.get("done") == counts.get("total"):
+        next_status = "verifying"
+    state = {
+        **state,
+        "status": next_status,
+        "updated_at": now_iso(),
+        "task_counts": counts,
+        "tasks": [
+            {
+                "manifest_id": task.get("manifest_id"),
+                "runtime_task_id": task.get("runtime_task_id"),
+                "label": task.get("label"),
+                "status": task.get("status"),
+            }
+            for task in task_states
+        ],
+    }
+    if next_status == "verifying" and not state.get("verification_ready_at"):
+        state["verification_ready_at"] = state["updated_at"]
+    if next_status == "failed" and not state.get("failed_at"):
+        state["failed_at"] = state["updated_at"]
+    return state, task_states, counts
+
+
+def run_supervise(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    run_id = validate_run_id(args.run_id)
+    with RuntimeLock():
+        state = read_run_state(run_id)
+        manifest = read_json(run_manifest_path(run_id))
+        previous_status = state.get("status")
+        state, task_states, counts = supervise_run_state(state, manifest)
+        write_json(run_state_path(run_id), state)
+        if state.get("status") != previous_status:
+            append_jsonl(
+                run_events_path(run_id),
+                {
+                    "type": f"run.{state.get('status')}",
+                    "timestamp": state["updated_at"],
+                    "run_id": run_id,
+                    "previous_status": previous_status,
+                    "task_counts": counts,
+                },
+            )
+        summary = write_run_summary(state, manifest)
+    output = {
+        "run_id": run_id,
+        "status": state.get("status"),
+        "previous_status": previous_status,
+        "task_counts": counts,
+        "tasks": task_states if args.include_tasks else None,
+        "summary": summary,
+    }
+    output = {key: value for key, value in output.items() if value is not None}
+    print_status_json(output)
 
 
 def send(args: argparse.Namespace) -> None:
@@ -1829,6 +1940,11 @@ def main() -> int:
     rp.add_argument("--force", action="store_true")
     rp.add_argument("--thread-heartbeat-automation-id", required=True, help="required; must name an ACTIVE thread heartbeat automation")
     rp.set_defaults(func=run_start)
+
+    rp = run_sub.add_parser("supervise")
+    rp.add_argument("run_id")
+    rp.add_argument("--include-tasks", action="store_true")
+    rp.set_defaults(func=run_supervise)
 
     p = sub.add_parser("dispatch", help="dispatch a validated manifest")
     p.add_argument("--manifest", required=True)
