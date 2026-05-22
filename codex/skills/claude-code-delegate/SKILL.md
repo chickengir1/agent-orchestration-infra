@@ -25,6 +25,18 @@ python3 -m venv ~/.codex/skills/claude-code-delegate/.venv
 
 Do not run this skill inside the Codex sandbox. It controls local worker processes, runtime task files, and Claude Code SDK sessions.
 
+## External Subagent Runtime Plan
+
+The next architecture target is documented in `EXTERNAL_SUBAGENT_RUNTIME_PLAN.md`.
+
+Use that plan when improving this skill from a Claude-specific task dispatcher into a backend-compatible external subagent runtime. The target shape is:
+
+- Codex main issues one bounded run request.
+- The runtime supervisor handles task dispatch, status compaction, verification, heartbeat resolution, cleanup, and summary writing.
+- Codex main reads compact run summaries instead of task logs or full runtime history.
+- Claude Code remains the first backend, with the same worker safety contract.
+- Future backends should fit behind the same adapter interface.
+
 ## Operating Model
 
 Use Claude as a bounded background worker pool. Codex remains the orchestrator, reviewer, integrator, and verifier.

@@ -1,10 +1,11 @@
 {
+  "alive": false,
   "mode": "sdk-worker-pool",
   "model": "opus",
   "pid": 66166,
   "started_at": "2026-05-22T00:58:51Z",
-  "status": "running",
-  "updated_at": "2026-05-22T00:58:51Z",
+  "status": "stopped",
+  "updated_at": "2026-05-22T01:02:36Z",
   "workdir": "/Users/leegangho/sbe-web-v4",
   "workers": 3
 }

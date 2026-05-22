@@ -1,8 +1,8 @@
 {
-  "checked_at": "2026-05-22T01:01:16Z",
-  "daemon_alive": true,
+  "checked_at": "2026-05-22T01:11:18Z",
+  "daemon_alive": false,
   "daemon_pid": 66166,
-  "daemon_status": "running",
+  "daemon_status": "stopped",
   "done_tasks": 16,
   "failed_tasks": 0,
   "last_task": {
@@ -15,7 +15,7 @@
   "queued_tasks": 0,
   "running_task_ids": [],
   "running_tasks": 0,
-  "runtime_status": "ready",
+  "runtime_status": "stopped",
   "stopped_tasks": 3,
   "workdir": "/Users/leegangho/sbe-web-v4",
   "workers": [
