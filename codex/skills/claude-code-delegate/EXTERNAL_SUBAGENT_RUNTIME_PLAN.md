@@ -458,14 +458,20 @@ Verification:
 Changes:
 
 - Support exact artifact assertions in manifest.
-- Run `verify_cmd`.
-- Check write path boundaries from recorded task metadata.
+- Add `run verify <run-id>`.
+- Run `verify_cmds`.
+- Check expected artifact paths against declared write paths.
+- Write `runtime/runs/<run-id>/artifacts.json`.
+- Move `verifying -> verified|failed`.
+- Keep default `run verify` output compact; full checks are opt-in.
 
 Verification:
 
 - exact artifact pass/fail tests.
 - command pass/fail tests.
 - write path mismatch test when detectable.
+- compact summary includes verification status.
+- detailed artifacts remain available without making default CLI output verbose.
 
 ### Checkpoint 6: Heartbeat Resolve
 

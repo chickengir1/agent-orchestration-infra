@@ -260,6 +260,10 @@ def run_summary_path(run_id: str) -> Path:
     return run_dir(run_id) / "summary.json"
 
 
+def run_artifacts_path(run_id: str) -> Path:
+    return run_dir(run_id) / "artifacts.json"
+
+
 def read_run_state(run_id: str) -> dict[str, Any]:
     path = run_state_path(run_id)
     if not path.exists():
@@ -1053,6 +1057,18 @@ def validate_manifest_data(manifest: dict[str, Any], strict: bool) -> dict[str, 
         )
         errors.extend(f"{task_id}: {item}" for item in result["errors"])
         warnings.extend(f"{task_id}: {item}" for item in result["warnings"])
+        write_paths = task.get("write_paths") or []
+        for expected_file in task.get("expected_files") or []:
+            expected_path = str(resolve_in_workdir(str(expected_file), workdir))
+            if not path_allowed(expected_path, write_paths, workdir):
+                errors.append(f"{task_id}: expected file is outside write paths: {expected_path}")
+        for expected in task.get("expected_contents") or []:
+            if not isinstance(expected, dict) or not expected.get("path"):
+                errors.append(f"{task_id}: expected_contents entries must contain path")
+                continue
+            expected_path = str(resolve_in_workdir(str(expected["path"]), workdir))
+            if not path_allowed(expected_path, write_paths, workdir):
+                errors.append(f"{task_id}: expected content path is outside write paths: {expected_path}")
     for task in tasks:
         task_id = task.get("id")
         dependencies = set(task.get("depends_on") or [])
@@ -1146,6 +1162,8 @@ def run_next_action(status_name: str, task_counts: dict[str, int]) -> str:
         return "check_status" if task_counts.get("active") else "run_supervise"
     if status_name == "verifying":
         return "verify_artifacts"
+    if status_name == "verified":
+        return "ready_for_codex_review"
     if status_name == "failed":
         return "inspect_failed_tasks"
     return "inspect_run"
@@ -1164,9 +1182,22 @@ def build_run_summary(state: dict[str, Any], manifest: dict[str, Any]) -> dict[s
         "group": state.get("group"),
         "tasks": {"total": len(tasks), **task_counts},
         "manifest_file": state.get("manifest_file"),
+        "artifacts_file": str(run_artifacts_path(state["run_id"])) if run_artifacts_path(state["run_id"]).exists() else None,
         "next_action": run_next_action(str(state.get("status") or "unknown"), task_counts),
         "metrics": {},
     }
+    if isinstance(state.get("verification"), dict):
+        verification = state["verification"]
+        summary["verification"] = {
+            key: value
+            for key, value in {
+                "status": verification.get("status"),
+                "checks": verification.get("checks"),
+                "failed": verification.get("failed"),
+            }.items()
+            if value is not None
+        }
+    summary = {key: value for key, value in summary.items() if value is not None}
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
     summary["metrics"]["summary_bytes"] = len(text.encode("utf-8"))
     text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
@@ -1351,6 +1382,9 @@ def run_start(args: argparse.Namespace) -> None:
                 ],
             }
         )
+        for key in ("verification", "verified_at", "failed_at"):
+            run_state.pop(key, None)
+        run_artifacts_path(run_id).unlink(missing_ok=True)
         write_json(run_manifest_path(run_id), manifest)
         write_json(run_state_path(run_id), run_state)
         write_state(state)
@@ -1392,6 +1426,9 @@ def supervise_run_state(state: dict[str, Any], manifest: dict[str, Any]) -> tupl
         state["verification_ready_at"] = state["updated_at"]
     if next_status == "failed" and not state.get("failed_at"):
         state["failed_at"] = state["updated_at"]
+    if next_status in {"running", "verifying", "created"}:
+        for key in ("verification", "verified_at", "failed_at"):
+            state.pop(key, None)
     return state, task_states, counts
 
 
@@ -1426,6 +1463,211 @@ def run_supervise(args: argparse.Namespace) -> None:
     }
     output = {key: value for key, value in output.items() if value is not None}
     print_status_json(output)
+
+
+def short_text(text: str, limit: int = 800) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...<truncated>"
+
+
+def add_check(checks: list[dict[str, Any]], name: str, status_name: str, **detail: Any) -> None:
+    checks.append({key: value for key, value in {"name": name, "status": status_name, **detail}.items() if value is not None})
+
+
+def run_verify_commands(commands: list[str], workdir: str, timeout: float) -> list[dict[str, Any]]:
+    checks: list[dict[str, Any]] = []
+    for index, command in enumerate(commands):
+        started = time.perf_counter()
+        try:
+            proc = subprocess.run(
+                ["/bin/sh", "-lc", command],
+                cwd=workdir,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+                check=False,
+            )
+            duration_ms = round((time.perf_counter() - started) * 1000, 2)
+            add_check(
+                checks,
+                f"verify-cmd:{index + 1}",
+                "passed" if proc.returncode == 0 else "failed",
+                command=command,
+                returncode=proc.returncode,
+                duration_ms=duration_ms,
+                stdout=short_text(proc.stdout.strip()) if proc.stdout.strip() else None,
+                stderr=short_text(proc.stderr.strip()) if proc.stderr.strip() else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            add_check(
+                checks,
+                f"verify-cmd:{index + 1}",
+                "failed",
+                command=command,
+                timeout_seconds=timeout,
+                stdout=short_text((exc.stdout or "").strip()) if isinstance(exc.stdout, str) and exc.stdout.strip() else None,
+                stderr=short_text((exc.stderr or "").strip()) if isinstance(exc.stderr, str) and exc.stderr.strip() else None,
+            )
+    return checks
+
+
+def verify_run(manifest: dict[str, Any], task_states: list[dict[str, Any]], timeout: float) -> dict[str, Any]:
+    workdir = str(manifest.get("workdir") or os.getcwd())
+    checks: list[dict[str, Any]] = []
+    counts = run_task_count_summary(task_states)
+    all_tasks_done = bool(counts.get("total")) and counts.get("done") == counts.get("total")
+    add_check(
+        checks,
+        "tasks-terminal-success",
+        "passed" if all_tasks_done else "failed",
+        done=counts.get("done", 0),
+        total=counts.get("total", 0),
+        failed=counts.get("failed", 0),
+        active=counts.get("active", 0),
+    )
+    for task in manifest.get("tasks") or []:
+        task_id = task.get("id")
+        write_paths = task.get("write_paths") or []
+        if write_paths:
+            add_check(checks, f"{task_id}:write-paths-recorded", "passed", count=len(write_paths))
+        else:
+            add_check(checks, f"{task_id}:write-paths-recorded", "failed")
+        for expected_file in task.get("expected_files") or []:
+            expected_path = str(resolve_in_workdir(str(expected_file), workdir))
+            in_scope = path_allowed(expected_path, write_paths, workdir)
+            exists = Path(expected_path).exists()
+            add_check(
+                checks,
+                f"{task_id}:expected-file",
+                "passed" if in_scope and exists else "failed",
+                path=expected_path,
+                in_write_scope=in_scope,
+                exists=exists,
+            )
+        for expected in task.get("expected_contents") or []:
+            expected_path = str(resolve_in_workdir(str(expected.get("path")), workdir))
+            in_scope = path_allowed(expected_path, write_paths, workdir)
+            path = Path(expected_path)
+            exists = path.exists()
+            actual = path.read_text() if exists else None
+            expected_text = str(expected.get("text") or "")
+            add_check(
+                checks,
+                f"{task_id}:expected-content",
+                "passed" if in_scope and exists and actual == expected_text else "failed",
+                path=expected_path,
+                in_write_scope=in_scope,
+                exists=exists,
+                expected_bytes=len(expected_text.encode("utf-8")),
+                actual_bytes=len(actual.encode("utf-8")) if actual is not None else None,
+            )
+        verify_cmds = task.get("verify_cmds") or []
+        if verify_cmds:
+            checks.extend(run_verify_commands([str(command) for command in verify_cmds], workdir, timeout))
+    failed = [check for check in checks if check.get("status") != "passed"]
+    return {
+        "schema_version": RUN_SCHEMA_VERSION,
+        "status": "failed" if failed else "verified",
+        "checked_at": now_iso(),
+        "checks": checks,
+        "summary": {
+            "total": len(checks),
+            "passed": len(checks) - len(failed),
+            "failed": len(failed),
+        },
+    }
+
+
+def compact_artifacts(run_id: str, artifacts: dict[str, Any]) -> dict[str, Any]:
+    failed_checks = [check.get("name") for check in artifacts.get("checks") or [] if check.get("status") != "passed"]
+    return {
+        key: value
+        for key, value in {
+            "status": artifacts.get("status"),
+            "checked_at": artifacts.get("checked_at"),
+            "summary": artifacts.get("summary"),
+            "failed_checks": failed_checks or None,
+            "artifacts_file": str(run_artifacts_path(run_id)),
+        }.items()
+        if value is not None
+    }
+
+
+def run_verify(args: argparse.Namespace) -> None:
+    require_unsandboxed()
+    run_id = validate_run_id(args.run_id)
+    with RuntimeLock():
+        state = read_run_state(run_id)
+        manifest = read_json(run_manifest_path(run_id))
+        previous_status = state.get("status")
+        state, task_states, counts = supervise_run_state(state, manifest)
+        if state.get("status") != "verifying":
+            artifacts = {
+                "schema_version": RUN_SCHEMA_VERSION,
+                "status": "not-ready",
+                "checked_at": now_iso(),
+                "checks": [
+                    {
+                        "name": "run-ready-for-verification",
+                        "status": "failed",
+                        "run_status": state.get("status"),
+                        "task_counts": counts,
+                    }
+                ],
+                "summary": {"total": 1, "passed": 0, "failed": 1},
+            }
+            summary = write_run_summary(state, manifest)
+            output = {
+                "run_id": run_id,
+                "status": state.get("status"),
+                "artifacts": artifacts if args.include_checks else compact_artifacts(run_id, artifacts),
+                "summary": summary if args.include_checks else None,
+                "summary_file": str(run_summary_path(run_id)),
+            }
+            output = {key: value for key, value in output.items() if value is not None}
+            print_status_json(output)
+            raise SystemExit(1)
+        artifacts = verify_run(manifest, task_states, args.timeout)
+        next_status = artifacts["status"]
+        state.update(
+            {
+                "status": next_status,
+                "updated_at": artifacts["checked_at"],
+                "verified_at": artifacts["checked_at"] if next_status == "verified" else state.get("verified_at"),
+                "failed_at": artifacts["checked_at"] if next_status == "failed" else state.get("failed_at"),
+                "verification": {
+                    "status": next_status,
+                    "checks": artifacts["summary"]["total"],
+                    "failed": artifacts["summary"]["failed"],
+                },
+            }
+        )
+        write_json(run_state_path(run_id), state)
+        write_json(run_artifacts_path(run_id), artifacts)
+        append_jsonl(
+            run_events_path(run_id),
+            {
+                "type": f"run.{next_status}",
+                "timestamp": state["updated_at"],
+                "run_id": run_id,
+                "previous_status": previous_status,
+                "verification": state["verification"],
+            },
+        )
+        summary = write_run_summary(state, manifest)
+    output = {
+        "run_id": run_id,
+        "status": state.get("status"),
+        "artifacts": artifacts if args.include_checks else compact_artifacts(run_id, artifacts),
+        "summary": summary if args.include_checks else None,
+        "summary_file": str(run_summary_path(run_id)),
+    }
+    output = {key: value for key, value in output.items() if value is not None}
+    print_status_json(output)
+    if artifacts["status"] != "verified":
+        raise SystemExit(1)
 
 
 def send(args: argparse.Namespace) -> None:
@@ -1764,6 +2006,15 @@ def validate_task(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def parse_expected_content(value: str, workdir: str) -> dict[str, str]:
+    if "=" not in value:
+        raise SystemExit("--expect-content must use PATH=TEXT")
+    path, text = value.split("=", 1)
+    if not path:
+        raise SystemExit("--expect-content path cannot be empty")
+    return {"path": str(resolve_in_workdir(path, workdir)), "text": normalize_prompt_arg(text)}
+
+
 def manifest_init(args: argparse.Namespace) -> None:
     require_unsandboxed()
     manifest = {
@@ -1794,6 +2045,8 @@ def manifest_add(args: argparse.Namespace) -> None:
         "write_paths": [str(resolve_in_workdir(path, workdir)) for path in args.write_path],
         "depends_on": args.depends_on or [],
         "verify_cmds": args.verify_cmd or [],
+        "expected_files": [str(resolve_in_workdir(path, workdir)) for path in args.expect_file or []],
+        "expected_contents": [parse_expected_content(item, workdir) for item in args.expect_content or []],
     }
     manifest.setdefault("tasks", []).append(task)
     manifest["updated_at"] = now_iso()
@@ -1907,6 +2160,8 @@ def main() -> int:
     mp.add_argument("--write-path", action="append", required=True)
     mp.add_argument("--depends-on", action="append")
     mp.add_argument("--verify-cmd", action="append")
+    mp.add_argument("--expect-file", action="append")
+    mp.add_argument("--expect-content", action="append", help="expected exact file content as PATH=TEXT")
     mp.set_defaults(func=manifest_add)
 
     mp = manifest_sub.add_parser("validate")
@@ -1945,6 +2200,12 @@ def main() -> int:
     rp.add_argument("run_id")
     rp.add_argument("--include-tasks", action="store_true")
     rp.set_defaults(func=run_supervise)
+
+    rp = run_sub.add_parser("verify")
+    rp.add_argument("run_id")
+    rp.add_argument("--timeout", type=float, default=120.0, help="timeout in seconds for each verify command")
+    rp.add_argument("--include-checks", action="store_true", help="print full verifier checks; default output is compact")
+    rp.set_defaults(func=run_verify)
 
     p = sub.add_parser("dispatch", help="dispatch a validated manifest")
     p.add_argument("--manifest", required=True)

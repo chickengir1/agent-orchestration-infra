@@ -1,16 +1,16 @@
 {
-  "checked_at": "2026-05-22T02:01:07Z",
+  "checked_at": "2026-05-22T02:11:09Z",
   "daemon_alive": false,
   "daemon_pid": null,
   "daemon_status": null,
   "done_tasks": 0,
   "failed_tasks": 0,
   "last_task": {
-    "group": "run-supervise-smoke",
-    "id": "3eec103b18976a23",
-    "label": "supervise-one",
+    "group": "run-verify-smoke",
+    "id": "1b80d3d55e8376f0",
+    "label": "verify-one",
     "status": "removed",
-    "updated_at": "2026-05-22T02:00:19Z"
+    "updated_at": "2026-05-22T02:08:27Z"
   },
   "model": "opus",
   "queued_task_ids": [],

@@ -194,6 +194,8 @@ After `send`, Codex must keep the conversation available. Do not block the user 
   --prompt-file /absolute/path/to/module-a.md \
   --read-path "$(pwd)/src/module-a.ts" \
   --write-path "$(pwd)/src/module-a.ts" \
+  --expect-file "$(pwd)/src/module-a.ts" \
+  --expect-content "$(pwd)/src/module-a.ts=expected exact content when useful" \
   --verify-cmd "npm test -- module-a"
 
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py manifest validate \
@@ -222,14 +224,18 @@ Direct `dispatch --manifest` remains available for lower-level debugging, but no
 ```bash
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py status
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run supervise checkpoint-8
+~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run verify checkpoint-8
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run status checkpoint-8
 ~/.codex/skills/claude-code-delegate/scripts/visible_claude.py run summary checkpoint-8
 ```
 
 `status` reads runtime task files and daemon state. It does not infer completion from terminal output. The default output is compact and should stay under 1 KB during normal use.
 `run supervise` reads only the task status files referenced by that run manifest, refreshes compact task counts, and moves the run to `running`, `verifying`, or `failed`.
+`run verify` runs only after `verifying`. It checks that run-linked tasks are `done`, expected files exist, expected exact contents match, expected artifact paths are inside declared write paths, and optional `verify_cmds` pass. It writes `runtime/runs/<run-id>/artifacts.json` and moves the run to `verified` or `failed`.
+Default `run verify` output is compact; use `run verify --include-checks <run-id>` only when the detailed check list is needed.
 `run status` and `run summary` read only the run files under `runtime/runs/<run-id>/` plus the task status files referenced by that run manifest; they do not scan historical task records. They refresh compact task counts in `summary.json`.
 `verifying` means Claude work is terminal-success and the next step is Codex/verifier artifact validation. It is not final correctness proof.
+`verified` means the declared verifier contract passed; Codex still owns final code review for non-declared correctness concerns.
 If the daemon is dead while tasks are still `queued` or `running`, `status` marks those tasks `failed`.
 `status` also reports `runtime_status` and `daemon_alive`, so a stopped worker pool is mechanically visible even if old task records remain.
 `status` also reports `heartbeat.delete_ready` and active task ids. Use these fields as the lifecycle gate for the Codex app automation:
