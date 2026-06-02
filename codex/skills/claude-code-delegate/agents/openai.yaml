@@ -1,4 +1,4 @@
 interface:
-  display_name: "Claude Code Delegate"
-  short_description: "Send prompts into a visible Claude Code Terminal worker."
-  default_prompt: "Start a visible Claude Code worker, send the bounded prompt into that same session, then inspect and verify the result."
+  display_name: "Prompt Engineering Harness"
+  short_description: "Compress and test prompts with eval cases."
+  default_prompt: "Use $prompt-engineering-harness to compress this prompt, define its behavior contract, and build an eval matrix."
