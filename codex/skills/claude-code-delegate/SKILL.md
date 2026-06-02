@@ -49,6 +49,7 @@ For reasoning models, avoid chain-of-thought instructions. Use direct goals, con
    - Create 3-7 cases: happy path, ambiguity, missing data, adversarial instruction, over-scope request, and one realistic regression.
    - For each case, define expected behavior and failure signals.
    - If the prompt is for code work, include verification commands or file inspections that the orchestrator will run.
+   - Keep eval cases as chat output by default. Create files only when the user explicitly asks to save, scaffold, or run a file-backed harness.
 
 6. Variant Review
    - Compare the current prompt and revised prompt against the eval cases.
@@ -60,6 +61,7 @@ For reasoning models, avoid chain-of-thought instructions. Use direct goals, con
    - Provide the eval matrix.
    - List removed or externalized context.
    - List remaining assumptions and follow-up checkpoints.
+   - Do not write prompt, report, or eval artifacts to disk unless the user requests persistent files.
 
 ## Token Triage
 
